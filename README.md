@@ -1,208 +1,109 @@
-<p align="center">
-  <img src="web/public/logo.svg" width="96" alt="infinite-canvas logo">
-</p>
+# 词元画布（infinite-canvas 托管版）
 
-<h1 align="center">无限画布 (infinite-canvas)</h1>
+这是 `basketikun/infinite-canvas` 的托管分支，作为词元API 的 `/canvas/` 子页面运行。生产入口 <https://ciyuanweb.cn/canvas/>，部署版本以 CiyuanAPI-ops 的 `OPS-CHANGELOG.md` S06 与 Server Atlas 为准。源码仓库 `Moli806/CiyuanCanvas`，默认分支 `ciyuan`。上游基线：v0.20.0，commit `9cd3deacbcc598361807afc16c059a80dd18b6f9`，MIT License，原始 `LICENSE` 保留在本目录。
 
-<p align="center">
-  <a href="https://linux.do/"><img src="https://img.shields.io/badge/Linux.do-Community-2b6de8?style=flat-square" alt="Linux.do"></a>
-  <a href="https://render.com/deploy?repo=https://github.com/basketikun/infinite-canvas"><img src="https://img.shields.io/badge/Render-Deploy-46e3b7?style=flat-square&logo=render&logoColor=111111" alt="Deploy to Render"></a>
-  <a href="https://github.com/basketikun/infinite-canvas"><img src="https://img.shields.io/github/stars/basketikun/infinite-canvas?style=flat-square&logo=github" alt="GitHub stars"></a>
-  <a href="https://github.com/basketikun/infinite-canvas/tags"><img src="https://img.shields.io/github/v/tag/basketikun/infinite-canvas?style=flat-square&label=version" alt="Version"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f97316?style=flat-square" alt="License"></a>
-  <a href="https://vite.dev/"><img src="https://img.shields.io/badge/Vite-7-646cff?style=flat-square&logo=vite&logoColor=white" alt="Vite"></a>
-  <a href="https://reactrouter.com/"><img src="https://img.shields.io/badge/React_Router-7-ca4245?style=flat-square&logo=reactrouter&logoColor=white" alt="React Router"></a>
-</p>
+## 当前边界
 
-<p align="center">
-<a href="https://trendshift.io/repositories/50077?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-50077" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/50077" alt="basketikun%2Finfinite-canvas | Trendshift" width="250" height="55"/></a>
-</p>
+- 用户只能使用词元API 后台返回的画布模型清单，不能添加渠道、Base URL、API Key 或自定义模型。
+- 登录复用词元API 的会话：画布先用刷新 Cookie 调 `/api/user/auth/refresh` 换取短期 Bearer 令牌，再访问 `/api/canvas/bootstrap`；不能只带 Cookie，否则会被 New API 判定为未登录并与登录页反复互跳。钱包余额显示同一用户的站内额度。
+- 画布不在用户 API 密钥里创建 Key：登录会话换取的短期 Bearer 由服务端 `SessionOrTokenAuth` 转成不落库、仅限画布模型的临时令牌，费用照常从用户钱包或订阅扣除。历史上自动创建的「词元画布（自动）」Key 会在下次加载画布时软删除。
+- 图片支持 `gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`、`banana-2.1`；视频支持 Wan 3 个、Kling 2 个、Seedance 5 个、海螺 H3 1 个、视频超分 1 个，共 12 个 SKU。反推提示词/图片问答使用 13 个已实测能读图的文本模型：GPT 4 个、Claude 5 个、Gemini 2 个、MiniMax 2 个；GLM、Kimi、DeepSeek 因无渠道或限流未纳入。ciyuan 的图片问答走 `/pg/chat/completions` 流式会话通道。
+- 视频创作台按后端 spec 开放参考图/参考视频/参考音乐，数量上限由模型决定，Kling 需按所选视频实际时长传 `video_durations`；外部插件、本地 Agent、配置页和提示词站外抓取仍关闭。参考素材按最终字节 SHA-256 前 128 位去重：图片 JPEG/PNG 超过 2MB 或 2560px 时缩到 2560px 并重编码（JPEG q85、PNG 无损），带非正常 EXIF 方向的 JPEG 保持原样，源图最长边超过 6000px 拒绝；视频 MP4/WebM/MOV 单个 ≤50MB，音乐 MP3/WAV/M4A/OGG 单个 ≤20MB；全部 7 天清理。
+- 画布项目、素材和生成记录仍保存在浏览器本地；服务端只保存视频参考图的临时托管文件。顶栏下方会提示“数据仅保存在当前浏览器，本站不保存”，并引导用户去「我的资产」下载；加载时申请 `navigator.storage.persist()`，但浏览器可能不授予。账户菜单显示画布 IndexedDB 已用空间/浏览器配额，「我的资产」的「一键导出全部」会打包 `assets.json` 和图片/视频 Blob 为 ZIP，可再导入恢复。
 
-<p align="center">
-  <a href="docs/content/docs/overview/quick-start.mdx">快速开始</a> · <a href="docs/content/docs/overview/features.mdx">功能介绍</a> · <a href="docs/content/docs/overview/render.mdx">Render 部署</a> · <a href="docs/content/docs/overview/docker.mdx">Docker 部署</a> · <a href="docs/content/docs/canvas/canvas-node-manual.mdx">画布节点操作手册</a> · <a href="docs/content/docs/canvas/canvas-shortcuts.mdx">画布快捷键</a> · <a href="SECURITY.md">漏洞提交</a> · <a href="docs/content/docs/progress/todo.mdx">待办事项</a> · <a href="canvas-agent/README.md">本地 Canvas Agent</a> · <a href="plugins/infinite-canvas">Codex app 插件</a>
-</p>
+## 构建
 
-无限画布是一款面向图片创作的开源工作台。它把画布编排、AI 图片生成、参考图编辑、对话助手、提示词库和素材沉淀放在同一个界面里，适合用来探索视觉方案并连续迭代图片结果。
-
-> [!CAUTION]
-> 项目目前处于开发阶段，不保证历史数据兼容。各种本地存储格式都可能直接调整，欢迎关注后续更新。
->
-> 如果你需要稳定维护自己的分支，建议自行 fork 后独立开发。二次开发与 PR 请保留原作者信息和前端页面标识。
-
-## 赞助商
-
-<table>
-  <tr>
-    <td width="190" align="center">
-      <a href="https://kunrouai.com/?utm_source=infinite-canvas" target="_blank" rel="noopener noreferrer"><img src="assets/kunrouai.svg" width="163" alt="坤肉AI"></a>
-    </td>
-    <td>
-      <a href="https://kunrouai.com/?utm_source=infinite-canvas" target="_blank" rel="noopener noreferrer">坤肉AI</a> 是一站式 AI 视觉创作平台，集 AI 生图、视频生成、多人协作画布及 Agent/MCP 连接于一体，适合个人创作与团队协作，同时面向企业提供源码出售及私有化部署服务，欢迎企业咨询合作！另有 <a href="https://api.kunrouai.com/?utm_source=infinite-canvas" target="_blank" rel="noopener noreferrer">API 开放平台</a>，提供丰富的 AI 模型 API 接口，支持快速接入与集成，欢迎开发者及企业对接合作！
-    </td>
-  </tr>
-  <tr>
-    <td width="190" align="center">
-      <a href="https://go.apimart.ai/gh-infinite-canvas" target="_blank" rel="noopener noreferrer"><img src="assets/apimart.png" width="163" alt="APIMart"></a>
-    </td>
-    <td>
-      感谢 <strong><a href="https://go.apimart.ai/gh-infinite-canvas" target="_blank" rel="noopener noreferrer">APIMart</a></strong> 赞助了本项目！<strong><a href="https://go.apimart.ai/gh-infinite-canvas" target="_blank" rel="noopener noreferrer">APIMart</a></strong> 是专注 AI 图片/视频生成的低价 API 平台，GPT-Image-2 低至 <strong>$0.006/张</strong>，<strong>1 美元</strong>可出图 <strong>160+ 张</strong>。图片、视频一套异步 API 通吃，提交任务拿 ID、回调取结果，跑批万张不超时、换模型不改代码。按量付费、无月费，通过 <strong><a href="https://go.apimart.ai/gh-infinite-canvas" target="_blank" rel="noopener noreferrer">此注册链接</a></strong> 注册即可开用。
-    </td>
-  </tr>
-  <tr>
-    <td width="190" align="center">
-      <a href="https://www.atlascloud.ai/zh?utm_source=github&utm_medium=link&utm_campaign=infinite-canvas" target="_blank" rel="noopener noreferrer"><img src="assets/atlascloud.svg" width="163" alt="Atlas Cloud"></a>
-    </td>
-    <td>
-      <a href="https://www.atlascloud.ai/zh?utm_source=github&utm_medium=link&utm_campaign=infinite-canvas" target="_blank" rel="noopener noreferrer">Atlas Cloud</a> is a full-modal AI inference platform that gives developers a single AI API to access video generation, image generation, and LLM APIs. Instead of managing multiple vendor integrations, you connect once and get unified access to 300+ curated models across all modalities. Check out <a href="https://www.atlascloud.ai/console/coding-plan" target="_blank" rel="noopener noreferrer">Atlas Cloud's new coding plan promotion</a> for more budget-friendly API access.
-    </td>
-  </tr>
-  <tr>
-    <td width="190" align="center">
-      <a href="https://metaso.cn/minimax-h3/?s=inf" target="_blank" rel="noopener noreferrer"><img src="assets/metaso.jpg" width="163" alt="秘塔科技"></a>
-    </td>
-    <td>
-      <strong>MiniMax H3 视频生成 API｜秘塔科技</strong> 秘塔科技提供高性价比的 MiniMax H3 视频生成服务：<strong>768P 仅 0.09 元/秒，2K 仅 0.15 元/秒</strong>。支持原生 2K、音画同步，API 兼容 <strong>OpenAI 协议</strong>，同时支持 <strong>ComfyUI</strong>，无需自行部署 GPU。 🎁 通过 <a href="https://metaso.cn/minimax-h3/?s=inf" target="_blank" rel="noopener noreferrer">无限画布专属链接注册</a>，即可领取赠送额度及专属优惠。
-    </td>
-  </tr>
-  <tr>
-    <td width="190" align="center">
-      <a href="https://88api.ai/sign-up?aff=zbs9" target="_blank" rel="noopener noreferrer"><img src="assets/88api.png" height="80" alt="88API"></a>
-    </td>
-    <td>
-      <strong>88API｜无限画布 深度优化分支</strong>
-      让主流模型能力结合得更紧密，内置海量提示词、满参满血！
-      🎨&nbsp;支持 GPT-Image、Gemini、Grok 等图片模型；原生 124K 全部同价！
-      🎬&nbsp;支持 Seedance、H3、Kling、Wan、Grok、Veo、omni 等视频模型；
-      🎙️&nbsp;支持 Whisper、TTS、STT 等语音能力。
-      从文案、出图、改图，到视频生成与配音，一张画布串联完整创作链路。不只是模型聚合，更让不同模型在同一工作流中真正协同。👉&nbsp;立即体验 🎁&nbsp;通过 <a href="https://88api.ai/sign-up?aff=zbs9" target="_blank" rel="noopener noreferrer">无限画布专属链接注册</a>，即可赠送额度及专属优惠。
-    </td>
-  </tr>
-  <tr>
-    <td width="190" align="center">
-      <a href="https://www.infistar.cc/register?aff=4X3V9NA9&ref_source=link" target="_blank" rel="noopener noreferrer"><img src="assets/infistar.png" width="163" alt="Infistar.ai 无限星河"></a>
-    </td>
-    <td>
-      <strong>无限画布 × Infistar.ai 无限星河｜内置原生画布 · 全能多模态 API</strong> 💡 原生集成，即点即用： Infistar.ai 已原生上架无限画布！同时提供低至官方 1 折的稳定 API 中转服务，模型倍率与调用明细全程透明。 🎨 多模态生图/生视频： 完美适配 Seedance、FLUX、Midjourney、Sora、Runway、Luma、可灵（Kling）等顶级图片与视频大模型。 🧠 全系语言模型： 覆盖 OpenAI、Claude、Gemini、Grok、DeepSeek、Qwen、GLM 等国内外主流模型，兼容 OpenAI 标准接口。 ⚡ 动态调度： 多路供应保障高可用，拒绝断连。 🎁 专属福利： 通过 <a href="https://infistar.ai/register?aff=4X3V9NA9&ref_source=link" target="_blank" rel="noopener noreferrer">专属链接</a> 注册，立享赠送额度/专属折扣/首充权益！
-    </td>
-  </tr>
-  <tr>
-    <td width="190" align="center">
-      <a href="https://www.packyapi.com/register?aff=34VV" target="_blank" rel="noopener noreferrer"><img src="assets/packycode.png" width="163" alt="PackyCode"></a>
-    </td>
-    <td>
-      <strong>无限画布 × PackyCode｜稳定高效的 API 中转服务商</strong>
-      💡&nbsp;PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务，让 AI 编程成为真正的生产力工具。
-      ⚡&nbsp;稳定高效： 具备自动故障转移、智能路由和无限并发等多种功能，保障调用稳定可靠。
-      🎁&nbsp;专属福利： 通过 <a href="https://www.packyapi.com/register?aff=34VV" target="_blank" rel="noopener noreferrer">专属链接</a> 注册，立即开始使用！
-    </td>
-  </tr>
-  <tr>
-    <td width="190" align="center">
-      <a href="https://heyroute.ai/basketikun" target="_blank" rel="noopener noreferrer"><img src="assets/heyroute.svg" width="163" alt="HeyRoute"></a>
-    </td>
-    <td>
-      <strong>无限画布 × HeyRoute｜全能多模态 API 服务商</strong>
-      💡&nbsp;HeyRoute 深度接入无限画布，将创意构思、图片生成、视频制作与内容开发融为一体，让每个灵感都能快速落地。
-      🎨&nbsp;多模态创作能力： 支持 AI 生图、生视频、图像编辑及内容生成，兼容 Seedance、MiniMax-H3、Image-2、Grok Video、Flux Klein、Gemini 等主流模型。
-      🧠&nbsp;丰富模型生态： 覆盖 OpenAI、Claude、Gemini、Grok、DeepSeek、Qwen、GLM 等语言模型，并兼容 OpenAI 标准接口。
-      ⚡&nbsp;稳定高效调用： 支持多模型、多线路灵活调度，调用记录清晰透明，满足日常创作、应用开发与批量生产需求。
-      🎁&nbsp;专属福利： 通过 <a href="https://heyroute.ai/basketikun">专属链接</a> 注册，即可领取新用户 15 美元试用额度！
-    </td>
-  </tr>
-</table>
-
-## 核心功能
-
-- 无限画布：多画布项目、节点拖拽缩放、连线、小地图、撤销重做、导入导出。
-- AI 创作：浏览器前台直连你配置的 OpenAI 兼容接口，支持文生图、图生图、参考图编辑、文本问答、音频和视频生成。
-- 画布助手：围绕选中节点和上游节点对话、生图，并把结果插回画布。
-- 本地 Agent：通过本机 Canvas Agent 连接 Codex / Claude Code，让 Agent 通过 MCP 操作当前画布；
-- Codex App 插件：提供 Codex app 插件，安装后会自动注册 MCP 并尝试拉起本地 Agent。
-- 插件系统：支持通过 URL 动态安装 / 启用 / 更新 / 卸载远程节点插件，并提供 TypeScript SDK 自行开发画布节点插件。
-- 自定义接口调用：可自定义生图 / 视频接口的调用方式，灵活适配各类中转站与自建服务。
-- 提示词库：内置 7 个开源提示词来源并支持自定义标准 JSON 来源，由浏览器前端直连并缓存到 IndexedDB。
-
-完整功能说明见 [功能介绍](docs/content/docs/overview/features.mdx)。
-
-如果你在为担心没有合适的生图API来发愁，可以查看该免费生图项目：[chatgpt2api](https://github.com/basketikun/chatgpt2api)
-
-## 快速开始
-
-AI API Key、Base URL、画布、素材和生成记录默认保存在浏览器本地。
-
-### 本地开发
+要求 Node.js 20.19+（本机已验证 Node 24）。
 
 ```bash
-git clone git@github.com:basketikun/infinite-canvas.git
-cd infinite-canvas
 cd web
-bun install
-bun run dev
+npm install --legacy-peer-deps
+npm run typecheck
+npm run build:canvas
 ```
 
-### Docker 运行
+## 上游同步
+
+- `upstream` 指向只读的 `basketikun/infinite-canvas`。
+- 基线为 `v0.20.0`；上游发版后执行：
 
 ```bash
-git clone git@github.com:basketikun/infinite-canvas.git
-cd infinite-canvas
-docker compose up -d
+git fetch upstream --tags
+git log --oneline <new-tag> ^HEAD
+git merge <new-tag>
+# 解冲突后重新 typecheck 和 build:canvas，并回读验证产物
 ```
 
-运行后默认端口3000，可访问 `http://localhost:3000`。
+- 画布后端与部署记录不在本仓库，分别在 `Moli806/CiyuanAPI` 和 `Moli806/CiyuanAPI-ops`。
 
-首次打开后进入右上角配置，填入自己的 OpenAI 兼容 `Base URL` 和 `API Key`。
+产物是 `web/dist/`，其中的资源路径以 `/canvas/` 为基址。上游依赖存在 antd 6 与 pro-components 的 peer 冲突，npm 安装需要 `--legacy-peer-deps`；bun 可用时也可以沿用上游的 `bun install`。不要在没有 Node 的 New API 服务器上构建。
 
-如果默认的OpenAI接口调用方式与您的API不同，可自定义生图/视频脚本调用。
+## 部署
 
-## 效果展示
+1. 把 `web/dist/` 上传到服务器 `/srv/ciyuan-canvas/`；保留上一版 dist 作为回滚副本。
+2. 在现有 `ciyuanweb.cn` 的 Caddy 站点块中，在兜底反代之前加入：
 
-<table width="100%">
-  <tr>
-    <td width="50%"><img src="https://i.ibb.co/TDFvGWDT/image.png" alt="image" border="0"></td>
-    <td width="50%"><img src="https://i.ibb.co/zVwJq3YS/image.png" alt="image" border="0"></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="https://i.ibb.co/PvY3qhhK/image.png" alt="image" border="0"></td>
-    <td width="50%"><img src="https://i.ibb.co/7D04LwN/image.png" alt="image" border="0"></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="https://i.ibb.co/bj30FtS5/5.png" alt="5" border="0"></td>
-    <td width="50%"><img src="https://i.ibb.co/hxRvjw51/image.png" alt="image" border="0"></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="https://i.ibb.co/jkWsF8q1/image.png" alt="image" border="0"></td>
-    <td width="50%"><img src="https://i.ibb.co/XrnfXHx7/image.png" alt="image" border="0"></td>
-  </tr>
-</table>
+```caddyfile
+redir /canvas /canvas/ 308
+handle_path /canvas/* {
+    root * /srv/ciyuan-canvas
+    @canvas_hashed {
+        path /assets/*
+        file {path}
+    }
+    header @canvas_hashed Cache-Control "public, max-age=31536000, immutable"
+    @canvas_static path /brand/* /icons/*
+    header @canvas_static Cache-Control "public, max-age=604800"
+    @canvas_entry path / /index.html /config.js /plugins/index.json
+    header @canvas_entry Cache-Control "no-cache"
+    try_files {path} /index.html
+    file_server
+}
+```
 
-## 联系方式
+`handle_path` 会去掉 `/canvas` 前缀，因此 dist 内容直接放在 `/srv/ciyuan-canvas/` 根下。哈希资源用一年 immutable，入口文件不缓存；缺失的 `/assets/*` 不会命中 `file` 匹配，因此不会把回退的 index.html 长缓存。`/api/*` 和 `/v1/*` 继续走现有的 New API 反代；`/canvas-assets/*` 由 New API 提供，不会被上面的 `/canvas/*` 匹配。修改 Caddy 前先 `caddy adapt`，再原地写回、`caddy validate` 和 `caddy reload`。
 
-项目定制二次开发需求 / 生图 API 需求可联系。
+3. New API 需要包含本目录对应的画布路由改动（`CUSTOMIZATIONS.md` C40），并按既有流程在本地构建镜像后发布。服务器不构建。
+4. 参考图托管目录默认是容器工作目录下的 `canvas-assets`，即 `/data/canvas-assets`，随 `/opt/new-api/data` 持久化。可用 `CANVAS_ASSET_DIR` 覆盖。上传时顺带清理 7 天前的文件；如需更严格的清理，可在 `/opt/new-api/ops` 增加定时任务。
+5. 服务器变更同轮更新 `OPS-CHANGELOG.md`、`FEATURE-MAP.md` 和 Server Atlas 的 New API 记录，并运行 `validate`。
 
-邮箱：1844025705@qq.com · QQ：1844025705
+## 本地联调
 
-## 赞助支持
+画布依赖词元API 的登录会话和 `/api/canvas/*`，不能只静态打开 dist。联调时让 New API 和画布同源：本地启动 New API 后，把 dist 放到其静态目录，或在本机用 Caddy 按上面的规则转发。不要在生产环境用本地 Vite dev server 直接连接未配置的新 API 实例。
 
-本项目长期开放广告赞助合作，欢迎品牌 / 产品投放，你的支持是持续更新的动力！
+## 本地 UI 预览（模拟接口）
 
-有广告赞助意向请通过上方联系方式沟通。
+只想看界面时，可以启动模拟服务：
 
-## 社区支持
+```bash
+python preview/server.py
+```
 
-学 AI，上 L 站：[LinuxDO](https://linux.do/)
+然后打开 `http://127.0.0.1:4173/canvas/`。它模拟登录、余额、模型和生成接口，不连接词元API，不产生真实费用；视频结果是占位文件，可能无法播放。仅限本机或内网使用，不要暴露到公网。
 
-点击链接加入群聊【开源无限画布(2群)】：https://qm.qq.com/q/HRt2kUnYiG
+## 关键实现位置
 
-## 开源协议
+- `web/src/components/layout/ciyuan-gate.tsx`：登录门禁、未登录跳 `/sign-in`、余额定期刷新。
+- `web/src/stores/use-ciyuan-store.ts`：bootstrap、模型清单、单一渠道注入、退出登录。
+- `web/src/services/ciyuan.ts`：刷新会话 Bearer、画布令牌调用、视频/香蕉图片任务、参考图上传。
+- `web/src/services/api/video.ts`：原生 `ciyuan` provider 与 30 分钟轮询。
+- `web/src/services/api/image.ts`：banana 任务式图片分支。
+- `web/src/components/layout/ciyuan-user-actions.tsx`：账户、余额、充值、密钥、退出登录。
+- `web/src/components/model-brand-icon.tsx`：按 bootstrap 下发的 LobeHub 图标键渲染厂商图标，未知键回退 CPU。
+- `web/src/components/video-settings-panel.tsx`：按模型 `CanvasVideoSpec` 动态渲染清晰度、比例、秒数和模式。
+- `web/src/components/image-settings-panel.tsx`：按模型 `CanvasImageSpec` 动态渲染质量、清晰度、比例、张数和透明背景。
+- `web/src/components/layout/brand-logo.tsx`、`web/public/brand/`：词元 logo 透明底，浅色用黑标、深色用白标；浏览器 favicon 固定使用透明黑标，避免浅色标签栏不可见。
+- `preview/server.py`：本地 UI 预览，模拟接口，不部署。
 
-本项目使用 [MIT License](LICENSE)。任何人都可以免费使用、复制、修改、分发、再授权和商业使用本项目，也可以用于闭源产品。
+## 新增模型
 
-## Star History
+1. 在 `rc41/controller/canvas.go` 的 `canvasModelCatalog` 增加公开模型 ID 和 capability；视频模型补 `CanvasVideoSpec`（分钟/最大秒数、固定或可选分辨率、比例、参考素材上限、是否支持首尾帧），图片模型补 `CanvasImageSpec`（质量档、清晰度、比例、张数上限、是否支持透明背景）。
+2. 图标自动从词元API 的 `pricing`/`vendors` 读取 LobeHub 图标键；如果出现新的图标键，在 `web/src/components/model-brand-icon.tsx` 增加对应 LobeHub 模块映射，未知键会回退 CPU 图标。
+3. 前端会按 spec 自动渲染视频和图片参数，不需要再改 `video-settings-panel.tsx` / `image-settings-panel.tsx` 的固定选项。
 
-<a href="https://www.star-history.com/?repos=basketikun%2Finfinite-canvas&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=basketikun/infinite-canvas&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=basketikun/infinite-canvas&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=basketikun/infinite-canvas&type=date&legend=top-left" />
- </picture>
-</a>
+## 安全说明
+
+- 画布不创建持久化 API Key；短期 Bearer 只保存在页面内存，服务端临时令牌不落库且仅允许画布模型。旧的「词元画布（自动）」Key 在下次加载画布时软删除，不会出现在密钥列表。
+- 参考图上传使用登录会话，不是画布令牌；文件公开可读，随机 128 位文件名是访问凭据，只接受 PNG/JPEG/WebP/GIF，单文件 20MB。
+- 远程节点插件、配置导入、本地 Agent 和站外提示词首页已关闭，避免第三方脚本读取用户令牌。
+- 画布停止等待不会取消词元侧任务；任务仍会继续并按实际结算。画布轮询上限已提高到 30 分钟，超时后不要重复提交。

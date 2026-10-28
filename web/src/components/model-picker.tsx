@@ -1,9 +1,10 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import { Cpu } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import i18n from "@/i18n";
+import { ModelBrandIcon } from "@/components/model-brand-icon";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { getCiyuanModel } from "@/services/ciyuan";
 import { cn } from "@/lib/utils";
 import { modelOptionLabel, modelOptionName, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
@@ -77,7 +78,7 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
                     ))
                 ) : (
                     <SelectItem value="__empty__" disabled>
-                        {emptyModelLabel(config, capability)}
+                        {emptyModelLabel(capability)}
                     </SelectItem>
                 )}
             </SelectContent>
@@ -85,10 +86,9 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
     );
 }
 
-function emptyModelLabel(config: AiConfig, capability?: ModelCapability) {
-    const label = capability ? i18n.t(`settingsPanels.model.capabilities.${capability}`) : "";
-    if (capability && config.models.length) return i18n.t("settingsPanels.model.assign", { capability: label });
-    return config.models.length ? i18n.t("settingsPanels.model.noMatch", { capability: label }) : i18n.t("settingsPanels.model.addFirst");
+function emptyModelLabel(capability?: ModelCapability) {
+    const label = capability ? i18n.t(`settingsPanels.model.capabilities.${capability}`) : i18n.t("settingsPanels.model.select");
+    return i18n.t("settingsPanels.model.managedEmpty", { capability: label });
 }
 
 function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
@@ -101,17 +101,5 @@ function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
 }
 
 function ModelIcon({ model }: { model: string }) {
-    const icon = resolveModelIcon(modelOptionName(model));
-    return icon ? <img src={icon} alt="" className="size-4 shrink-0 dark:invert" /> : <Cpu className="size-4 shrink-0 opacity-70" />;
-}
-
-function resolveModelIcon(model: string) {
-    const name = model.toLowerCase();
-    if (name.includes("claude") || name.includes("anthropic")) return "/icons/claude.svg";
-    if (name.includes("gemini") || name.includes("google")) return "/icons/gemini.svg";
-    if (name.includes("gpt") || name.includes("openai")) return "/icons/openai.svg";
-    if (name.includes("grok") || name.includes("grok")) return "/icons/grok.svg";
-    if (name.includes("deepseek") || name.includes("deepseek")) return "/icons/deepseek.svg";
-    if (name.includes("glm") || name.includes("glm")) return "/icons/glm.svg";
-    return "";
+    return <ModelBrandIcon icon={getCiyuanModel(modelOptionName(model))?.icon} size={16} />;
 }

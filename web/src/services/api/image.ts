@@ -3,6 +3,7 @@ import axios from "axios";
 import i18n from "@/i18n";
 import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
+import { ciyuanAxios, ciyuanSessionFetch, requestCiyuanBananaImages, requestCiyuanChatQuestion, type CiyuanChatMessage } from "@/services/ciyuan";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
@@ -470,12 +471,22 @@ function consumeResponseStreamText(state: ResponseStreamState, text: string, onD
 }
 
 async function requestStreamingResponse(config: AiConfig, body: Record<string, unknown>, onDelta?: (text: string) => void, options?: RequestOptions): Promise<ToolResponseResult> {
-    const response = await fetch(aiApiUrl(config, "/responses"), {
-        method: "POST",
-        headers: { ...aiHeaders(config, "application/json"), Accept: "text/event-stream" },
-        body: JSON.stringify({ ...body, stream: true }),
-        signal: options?.signal,
-    });
+    const url = aiApiUrl(config, "/responses");
+    const payload = JSON.stringify({ ...body, stream: true });
+    const response =
+        config.apiFormat === "ciyuan"
+            ? await ciyuanSessionFetch(url, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+                  body: payload,
+                  signal: options?.signal,
+              })
+            : await fetch(url, {
+                  method: "POST",
+                  headers: { ...aiHeaders(config, "application/json"), Accept: "text/event-stream" },
+                  body: payload,
+                  signal: options?.signal,
+              });
     if (!response.ok) throw new Error(await readFetchError(response, apiText("requestFailed")));
     if (!response.body) {
         const payload = (await response.json()) as ResponseApiPayload;
@@ -714,6 +725,14 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
     }
+    if (requestConfig.apiFormat === "ciyuan" && requestConfig.model === "banana-2.1") {
+        try {
+            const urls = await requestCiyuanBananaImages(requestConfig, withSystemPrompt(requestConfig, prompt), [], n, options?.signal);
+            return urls.map((dataUrl) => ({ id: nanoid(), dataUrl }));
+        } catch (error) {
+            throw new Error(readAxiosError(error, apiText("requestFailed")));
+        }
+    }
     if (requestConfig.apiFormat === "gemini") {
         try {
             return await requestGeminiImages(requestConfig, prompt, [], n, options);
@@ -724,26 +743,33 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(config.size);
     const background = normalizeBackground(config.background);
+    const body = {
+        model: requestConfig.model,
+        prompt: withSystemPrompt(requestConfig, prompt),
+        n,
+        ...(quality ? { quality } : {}),
+        ...(requestSize ? { size: requestSize } : {}),
+        ...(background ? { background } : {}),
+        // gpt-image models reject response_format; they always return b64.
+        ...(/gpt-image/.test(requestConfig.model) ? {} : { response_format: "b64_json" }),
+        output_format: IMAGE_OUTPUT_FORMAT,
+    };
     try {
-        const response = await axios.post<ImageApiResponse>(
-            aiApiUrl(requestConfig, "/images/generations"),
-            {
-                model: requestConfig.model,
-                prompt: withSystemPrompt(requestConfig, prompt),
-                n,
-                ...(quality ? { quality } : {}),
-                ...(requestSize ? { size: requestSize } : {}),
-                ...(background ? { background } : {}),
-                // gpt-image models reject response_format; they always return b64.
-                ...(/gpt-image/.test(requestConfig.model) ? {} : { response_format: "b64_json" }),
-                output_format: IMAGE_OUTPUT_FORMAT,
-            },
-            {
-                headers: aiHeaders(requestConfig, "application/json"),
-                signal: options?.signal,
-                timeout: IMAGE_REQUEST_TIMEOUT_MS,
-            },
-        );
+        const response =
+            requestConfig.apiFormat === "ciyuan"
+                ? await ciyuanAxios<ImageApiResponse>({
+                      method: "post",
+                      url: aiApiUrl(requestConfig, "/images/generations"),
+                      data: body,
+                      headers: { "Content-Type": "application/json" },
+                      signal: options?.signal,
+                      timeout: IMAGE_REQUEST_TIMEOUT_MS,
+                  })
+                : await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/generations"), body, {
+                      headers: aiHeaders(requestConfig, "application/json"),
+                      signal: options?.signal,
+                      timeout: IMAGE_REQUEST_TIMEOUT_MS,
+                  });
         const images = await parseImagePayload(response.data);
         return images;
     } catch (error) {
@@ -772,6 +798,14 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
                 signal: options?.signal,
             });
             return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
+        } catch (error) {
+            throw new Error(readAxiosError(error, apiText("requestFailed")));
+        }
+    }
+    if (requestConfig.apiFormat === "ciyuan" && requestConfig.model === "banana-2.1") {
+        try {
+            const urls = await requestCiyuanBananaImages(requestConfig, withSystemPrompt(requestConfig, requestPrompt), references, n, options?.signal);
+            return urls.map((dataUrl) => ({ id: nanoid(), dataUrl }));
         } catch (error) {
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
@@ -810,7 +844,20 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     files.forEach((file) => formData.append(imageField, file));
 
     try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, { headers: aiHeaders(requestConfig), signal: options?.signal, timeout: IMAGE_REQUEST_TIMEOUT_MS });
+        const response =
+            requestConfig.apiFormat === "ciyuan"
+                ? await ciyuanAxios<ImageApiResponse>({
+                      method: "post",
+                      url: aiApiUrl(requestConfig, "/images/edits"),
+                      data: formData,
+                      signal: options?.signal,
+                      timeout: IMAGE_REQUEST_TIMEOUT_MS,
+                  })
+                : await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, {
+                      headers: aiHeaders(requestConfig),
+                      signal: options?.signal,
+                      timeout: IMAGE_REQUEST_TIMEOUT_MS,
+                  });
         const images = await parseImagePayload(response.data);
         return images;
     } catch (error) {
@@ -839,6 +886,13 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
         }
     }
     try {
+        if (requestConfig.apiFormat === "ciyuan") {
+            const answer =
+                (await requestCiyuanChatQuestion(requestConfig, withSystemMessage(requestConfig, messages) as CiyuanChatMessage[], onDelta, options?.signal)).trim() ||
+                apiText("noContent");
+            if (answer === apiText("noContent")) onDelta(answer);
+            return answer;
+        }
         if (requestConfig.apiFormat === "gemini") {
             const answer = (await requestGeminiStreamingResponse(requestConfig, toGeminiBody(requestConfig, messages), onDelta, options)).content || apiText("noContent");
             if (answer === apiText("noContent")) onDelta(answer);
