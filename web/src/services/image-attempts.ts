@@ -93,6 +93,24 @@ export async function mirrorGeneratedMedia(blob: Blob, name: string): Promise<st
     }
 }
 
+/** Logout must not leak one account's canvas data to the next login. */
+export async function clearCanvasLocalData(): Promise<void> {
+    const { useCanvasStore } = await import("@/stores/canvas/use-canvas-store");
+    const { useAssetStore } = await import("@/stores/use-asset-store");
+    // Drop the in-memory state first, then the persisted keys and every blob
+    // cache, and wait for all of it: a 400ms persist debounce or a reload right
+    // after logout could otherwise restore the previous account's projects.
+    useCanvasStore.setState({ projects: [], deletedProjects: [] });
+    useAssetStore.getState().replaceAssets([]);
+    const stores = ["image_generation_logs", "video_generation_logs", "image_files", "image_previews", "media_files"];
+    await Promise.all([
+        attemptStore.clear().catch(() => undefined),
+        Promise.resolve(useCanvasStore.persist.clearStorage()).catch(() => undefined),
+        Promise.resolve(useAssetStore.persist.clearStorage()).catch(() => undefined),
+        ...stores.map((storeName) => localforage.createInstance({ name: "infinite-canvas", storeName }).clear().catch(() => undefined)),
+    ]);
+}
+
 function delay(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }

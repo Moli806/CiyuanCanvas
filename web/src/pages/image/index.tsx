@@ -13,7 +13,7 @@ import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { stageGeneratedImage } from "@/services/generated-image";
 import { beginImageAttempt, finishImageAttempt } from "@/services/image-attempts";
 import { fetchCanvasImageResult } from "@/services/ciyuan";
-import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { modelOptionLabel, modelOptionName, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useCiyuanStore } from "@/stores/use-ciyuan-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
@@ -125,7 +125,7 @@ export default function ImagePage() {
     }, [running, startedAt]);
 
     useEffect(() => {
-        void refreshLogs();
+        void refreshLogs(true);
     }, []);
 
     const addReferences = async (files?: FileList | null) => {
@@ -191,7 +191,10 @@ export default function ImagePage() {
         setStartedAt(batchStartedAt);
 
         const logId = nanoid();
-        const attempts = await Promise.all(Array.from({ length: generationCount }, () => beginImageAttempt("workbench")));
+        // banana-2.1 runs as a media task and has no image replay row, so it must
+        // not create attempt ids that the settle step would misread as lost.
+        const replayable = modelOptionName(model) !== "banana-2.1";
+        const attempts = replayable ? await Promise.all(Array.from({ length: generationCount }, () => beginImageAttempt("workbench"))) : [];
         const requestIds = attempts.map((attempt) => attempt.id);
         await saveLog(
             buildLog({
@@ -312,7 +315,7 @@ export default function ImagePage() {
 
     const deleteSelectedLogs = () => {
         const imageKeys = logs.filter((log) => selectedLogIds.includes(log.id)).flatMap((log) => log.images.map((image) => image.storageKey).filter((key): key is string => Boolean(key)));
-        void Promise.all([deleteStoredImages(imageKeys), ...selectedLogIds.map((id) => logStore.removeItem(id))]).then(refreshLogs);
+        void Promise.all([deleteStoredImages(imageKeys), ...selectedLogIds.map((id) => logStore.removeItem(id))]).then(() => refreshLogs());
         if (previewLog && selectedLogIds.includes(previewLog.id)) {
             setPreviewLog(null);
             setResults([]);
@@ -326,6 +329,18 @@ export default function ImagePage() {
         await refreshLogs();
     };
 
+    const readStoredLog = async (id: string): Promise<GenerationLog | null> => {
+        const raw = await logStore.getItem<GenerationLog>(id);
+        return raw ? normalizeLog(raw) : null;
+    };
+
+    // A settle that runs after the live request already finished (or after the
+    // user retried) must never overwrite the newer record.
+    const stillPending = async (id: string) => {
+        const current = await readStoredLog(id);
+        return Boolean(current && current.status === "pending");
+    };
+
     const syncPreview = (log: GenerationLog) => {
         setPreviewLog((current) => (current?.id === log.id ? log : current));
         setResults((current) => {
@@ -336,9 +351,13 @@ export default function ImagePage() {
         });
     };
 
-    const refreshLogs = async () => {
+    const refreshLogs = async (resolvePending = false) => {
         const stored = await readStoredLogs();
         setLogs(stored);
+        // Only the initial load settles interrupted records. Records created in
+        // this session are still running (banana included) and must not be
+        // judged by the server-side row lookup yet.
+        if (!resolvePending) return;
         for (const log of stored) {
             if (log.status === "pending") void settlePendingLog(log);
         }
@@ -360,22 +379,29 @@ export default function ImagePage() {
 
     const settlePendingLogInner = async (log: GenerationLog) => {
         const ids = log.requestIds || [];
-        if (!ids.length || Date.now() - log.createdAt > 11 * 60_000) {
+        const fail = async (reason: string) => {
+            if (!(await stillPending(log.id))) return;
             for (const id of ids) await finishImageAttempt(id);
-            const failed = { ...log, status: "failed" as const, failCount: log.config.count ? Number(log.config.count) : 1, error: t("imageWorkbench.interrupted") };
+            const failed = { ...log, status: "failed" as const, failCount: log.config.count ? Number(log.config.count) : 1, durationMs: Math.max(0, Date.now() - log.createdAt), error: reason };
             await saveLog(failed);
             syncPreview(failed);
+        };
+        if (!ids.length) {
+            // Banana runs on the media-task path, which has no image replay row.
+            await fail(t("imageWorkbench.unresumable"));
             return;
         }
-        // The server keeps a request alive for at most 10 minutes; after that a
-        // missing result really means the attempt failed.
-        const deadline = Date.now() + 10.5 * 60_000;
+        // The middleware writes a "running" row as soon as it accepts the
+        // attempt, so an absent row means the request never reached the server.
+        const replayTimeoutMs = (useCiyuanStore.getState().imageReplayTimeoutSeconds || 1800) * 1000;
+        const hardDeadline = Math.max(Date.now() + 5 * 60_000, log.createdAt + replayTimeoutMs + 2 * 60_000);
         for (;;) {
-            const results = await Promise.all(ids.map((id) => fetchCanvasImageResult(id).catch(() => null)));
+            if (!(await stillPending(log.id))) return;
+            const rows = await Promise.all(ids.map((id) => fetchCanvasImageResult(id).catch(() => null)));
             const images: GeneratedImage[] = [];
-            for (const result of results) {
-                if (result?.status !== "completed") continue;
-                for (const asset of result.assets) {
+            for (const row of rows) {
+                if (row?.status !== "completed") continue;
+                for (const asset of row.assets) {
                     const url = new URL(asset.url, window.location.origin).toString();
                     try {
                         const stored = await uploadImage(url);
@@ -385,18 +411,33 @@ export default function ImagePage() {
                     }
                 }
             }
-            if (images.length) {
+            // A slot is settled when the server reports completed/failed, or when
+            // it never got a row and the short grace period has passed (the request
+            // never reached the server). Missing slots must not keep a batch with
+            // successful images waiting until the 30-minute ceiling.
+            const now = Date.now();
+            const missingPastGrace = now - log.createdAt > 90_000;
+            const stillWaiting = rows.some((row) => (!row ? !missingPastGrace : row.status === "running"));
+            if (!stillWaiting) {
+                if (!(await stillPending(log.id))) return;
                 for (const id of ids) await finishImageAttempt(id);
-                const done = { ...log, status: (images.length >= ids.length ? "success" : "failed") as GenerationLog["status"], images, successCount: images.length, failCount: Math.max(0, ids.length - images.length), durationMs: Date.now() - log.createdAt, error: undefined };
+                const failedRow = rows.find((row) => row?.status === "failed");
+                const allMissing = rows.every((row) => !row);
+                const done = {
+                    ...log,
+                    status: (images.length ? "success" : "failed") as GenerationLog["status"],
+                    images,
+                    successCount: images.length,
+                    failCount: ids.length - images.length,
+                    durationMs: now - log.createdAt,
+                    error: images.length ? undefined : failedRow?.error || (allMissing ? t("imageWorkbench.noServerRecord") : t("workbench.generationFailed")),
+                };
                 await saveLog(done);
                 syncPreview(done);
                 return;
             }
-            if (Date.now() > deadline) {
-                for (const id of ids) await finishImageAttempt(id);
-                const failed = { ...log, status: "failed" as const, failCount: ids.length, durationMs: Date.now() - log.createdAt, error: t("imageWorkbench.interrupted") };
-                await saveLog(failed);
-                syncPreview(failed);
+            if (Date.now() > hardDeadline) {
+                await fail(t("imageWorkbench.interrupted"));
                 return;
             }
             await new Promise((resolve) => setTimeout(resolve, 10_000));
@@ -463,8 +504,10 @@ export default function ImagePage() {
         // its request id before the request leaves, exactly like 开始生成, so a
         // refresh during the retry keeps the progress visible.
         const logId = nanoid();
-        const attempt = await beginImageAttempt("workbench");
-        const requestIds = [attempt.id];
+        // banana-2.1 has no replay row, so a retry must not create one either.
+        const replayable = modelOptionName(model) !== "banana-2.1";
+        const attempt = replayable ? await beginImageAttempt("workbench") : null;
+        const requestIds = attempt ? [attempt.id] : [];
         await saveLog(
             buildLog({
                 id: logId,
@@ -481,7 +524,7 @@ export default function ImagePage() {
             }),
         );
         try {
-            const image = await runGenerationSlot(index, snapshot, attempt.id);
+            const image = await runGenerationSlot(index, snapshot, attempt?.id);
             await saveLog(
                 buildLog({
                     id: logId,

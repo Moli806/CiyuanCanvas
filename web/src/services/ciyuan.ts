@@ -85,6 +85,7 @@ export type CiyuanBootstrap = {
     models: CiyuanModel[];
     defaults: Partial<Record<CiyuanCapability, string>>;
     storage?: CiyuanCanvasStorage;
+    image_replay_timeout_seconds?: number;
 };
 
 export class CiyuanUnauthorizedError extends Error {
@@ -620,12 +621,16 @@ export function deleteCanvasServerAsset(name: string) {
     return canvasJson<{ deleted: string }>(`/api/canvas/assets/${encodeURIComponent(name)}`, { method: "DELETE" });
 }
 
-export async function fetchCanvasImageResult(requestId: string): Promise<{ status: string; assets: Array<{ name: string; url: string }> } | null> {
+export async function fetchCanvasImageResult(requestId: string): Promise<{ status: string; error?: string; assets: Array<{ name: string; url: string }> } | null> {
     const response = await sessionRequest(`/api/canvas/image-results/${encodeURIComponent(requestId)}`, { cache: "no-store" });
     if (response.status === 404) return null;
-    const payload = (await response.json().catch(() => null)) as { success?: boolean; data?: { status?: string; assets?: Array<{ name: string; url: string }> } } | null;
+    const payload = (await response.json().catch(() => null)) as { success?: boolean; data?: { status?: string; error?: string; assets?: Array<{ name: string; url: string }> } } | null;
     if (!response.ok || !payload?.success || !payload.data) return null;
-    return { status: payload.data.status || "", assets: payload.data.assets || [] };
+    return { status: payload.data.status || "", error: payload.data.error, assets: payload.data.assets || [] };
+}
+
+export function getServerCanvasProject(id: string) {
+    return canvasJson<CiyuanServerProject & { data?: unknown }>(`/api/canvas/projects/${encodeURIComponent(id)}`, { cache: "no-store" });
 }
 
 export function fetchServerCanvasProjects() {

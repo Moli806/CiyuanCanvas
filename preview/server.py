@@ -340,10 +340,24 @@ class Handler(SimpleHTTPRequestHandler):
             self._json({"success": True, "message": "", "data": {"storage": PREVIEW_STORAGE, "assets": []}})
             return
         if self.path.startswith("/api/canvas/projects"):
-            self._json({"success": True, "message": "", "data": {"projects": list(PREVIEW_PROJECTS.values())}})
+            project_id = self.path.split("/api/canvas/projects/", 1)[1] if "/api/canvas/projects/" in self.path else ""
+            if project_id:
+                project = PREVIEW_PROJECTS.get(project_id)
+                if not project:
+                    self._json({"success": False, "message": "not found"}, 404)
+                    return
+                self._json({"success": True, "message": "", "data": project})
+                return
+            self._json({"success": True, "message": "", "data": {"projects": [{"id": p["id"], "title": p["title"], "bytes": p["bytes"], "created_at": p["created_at"], "updated_at": p["updated_at"]} for p in PREVIEW_PROJECTS.values()]}})
             return
         if self.path.startswith("/api/canvas/image-results/"):
             request_id = self.path.rsplit("/", 1)[-1]
+            if request_id.startswith("img_previewfail"):
+                self._json({"success": True, "message": "", "data": {"request_id": request_id, "status": "failed", "error": "upstream safety rejection (preview)", "created_at": 0, "expires_at": 0, "assets": []}})
+                return
+            if request_id.startswith("img_previewrunning"):
+                self._json({"success": True, "message": "", "data": {"request_id": request_id, "status": "running", "created_at": 0, "expires_at": 0, "assets": []}})
+                return
             if request_id.startswith("img_previewdone"):
                 self._json({"success": True, "message": "", "data": {"request_id": request_id, "status": "completed", "created_at": 0, "expires_at": 0, "assets": [{"name": "0" * 32 + ".png", "url": "/canvas-assets/" + "0" * 32 + ".png"}]}})
                 return

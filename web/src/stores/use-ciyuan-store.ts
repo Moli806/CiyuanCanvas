@@ -23,6 +23,7 @@ type CiyuanState = {
     quotaPerUnit: number;
     error: string;
     storage: CiyuanCanvasStorage | null;
+    imageReplayTimeoutSeconds: number;
     recoveredImages: number;
     refresh: (silent?: boolean) => Promise<void>;
     refreshStorage: () => Promise<void>;
@@ -101,6 +102,7 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
     quotaPerUnit: 500000,
     error: "",
     storage: null,
+    imageReplayTimeoutSeconds: 1800,
     recoveredImages: 0,
 
     refresh: (silent = false) => {
@@ -118,6 +120,7 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
                     quotaPerUnit: data.quota_per_unit,
                     error: "",
                     ...(data.storage ? { storage: data.storage } : {}),
+                    imageReplayTimeoutSeconds: data.image_replay_timeout_seconds && data.image_replay_timeout_seconds > 0 ? data.image_replay_timeout_seconds : 1800,
                 });
             } catch (error) {
                 if (error instanceof CiyuanUnauthorizedError) {
@@ -146,7 +149,9 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
 
     logout: async () => {
         await logoutCiyuan();
+        const { clearCanvasLocalData } = await import("@/services/image-attempts");
+        await clearCanvasLocalData().catch(() => undefined);
         clearConfigToken();
-        set({ status: "unauthenticated", user: null, models: [], error: "", storage: null, recoveredImages: 0 });
+        set({ status: "unauthenticated", user: null, models: [], error: "", storage: null, imageReplayTimeoutSeconds: 1800, recoveredImages: 0 });
     },
 }));
