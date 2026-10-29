@@ -39,6 +39,9 @@ def make_preview_png(width=768, height=512):
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b"")
 
 
+PREVIEW_STORAGE = {"used_bytes": 0, "quota_bytes": 1 << 30, "asset_count": 0, "retention_days": 7, "earliest_expiry": 0}
+PREVIEW_PROJECTS = {}
+
 PNG_BYTES = make_preview_png()
 PNG_B64 = base64.b64encode(PNG_BYTES).decode("ascii")
 # A placeholder container. It exercises upload/poll/store paths; it is not a
@@ -58,6 +61,7 @@ BOOTSTRAP = {
             "used_quota": 0,
         },
         "quota_per_unit": QUOTA_PER_UNIT,
+        "storage": {"used_bytes": 0, "quota_bytes": 1 << 30, "asset_count": 0, "retention_days": 7, "earliest_expiry": 0},
         "models": [
             {"id": "gpt-image-2.5-flare", "capability": "image"},
             {"id": "gpt-image-2.5-sunburst", "capability": "image"},
@@ -332,6 +336,19 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.startswith("/api/canvas/bootstrap"):
             self._json(BOOTSTRAP)
             return
+        if self.path.startswith("/api/canvas/storage"):
+            self._json({"success": True, "message": "", "data": {"storage": PREVIEW_STORAGE, "assets": []}})
+            return
+        if self.path.startswith("/api/canvas/projects"):
+            self._json({"success": True, "message": "", "data": {"projects": list(PREVIEW_PROJECTS.values())}})
+            return
+        if self.path.startswith("/api/canvas/image-results/"):
+            request_id = self.path.rsplit("/", 1)[-1]
+            if request_id.startswith("img_previewdone"):
+                self._json({"success": True, "message": "", "data": {"request_id": request_id, "status": "completed", "created_at": 0, "expires_at": 0, "assets": [{"name": "0" * 32 + ".png", "url": "/canvas-assets/" + "0" * 32 + ".png"}]}})
+                return
+            self._json({"success": False, "message": "preview endpoint not implemented"}, 404)
+            return
         if self.path.startswith("/v1/models"):
             self._json({"object": "list", "data": [{"id": item["id"], "object": "model"} for item in BOOTSTRAP["data"]["models"]]})
             return
@@ -386,12 +403,15 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception:
                 body = {}
             count = int(body.get("n") or 1)
-            print("image generate:", json.dumps(body, ensure_ascii=False), flush=True)
+            print("image generate reqid=%s:" % (self.headers.get("X-Ciyuan-Request-Id") or "-"), json.dumps(body, ensure_ascii=False), flush=True)
             self._json({"created": 0, "data": [{"b64_json": PNG_B64} for _ in range(max(1, min(count, 10)))]})
             return
         if self.path.startswith("/v1/images/edits"):
             print("image edit:", self.headers.get("Content-Type", ""), flush=True)
             self._json({"created": 0, "data": [{"b64_json": PNG_B64}]})
+            return
+        if self.path.startswith("/api/canvas/assets/cleanup"):
+            self._json({"success": True, "message": "", "data": {"deleted": 0, "freed": 0, "storage": PREVIEW_STORAGE}})
             return
         if self.path.startswith("/api/canvas/assets"):
             self._json({"success": True, "message": "", "data": {"path": "/canvas-assets/" + "0" * 32 + ".png"}})
@@ -401,6 +421,39 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path.startswith(("/api/", "/v1/")):
             self._json({"success": False, "message": "preview endpoint not implemented"}, 404)
+            return
+        self._json({"success": False, "message": "preview endpoint not implemented"}, 404)
+
+    def do_PUT(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b""
+        if self.path.startswith("/api/canvas/settings"):
+            try:
+                body = json.loads(raw.decode("utf-8"))
+            except Exception:
+                body = {}
+            PREVIEW_STORAGE["retention_days"] = int(body.get("retention_days") or 7)
+            self._json({"success": True, "message": "", "data": PREVIEW_STORAGE})
+            return
+        if self.path.startswith("/api/canvas/projects/"):
+            project_id = self.path.rsplit("/", 1)[-1]
+            try:
+                project = json.loads(raw.decode("utf-8"))
+            except Exception:
+                project = None
+            if isinstance(project, dict):
+                PREVIEW_PROJECTS[project_id] = {"id": project_id, "title": project.get("title", ""), "bytes": len(raw), "created_at": 0, "updated_at": 0, "data": project}
+            self._json({"success": True, "message": "", "data": {"id": project_id, "bytes": len(raw), "saved_at": 0}})
+            return
+        self._json({"success": False, "message": "preview endpoint not implemented"}, 404)
+
+    def do_DELETE(self):
+        if self.path.startswith("/api/canvas/projects/"):
+            PREVIEW_PROJECTS.pop(self.path.rsplit("/", 1)[-1], None)
+            self._json({"success": True, "message": "", "data": None})
+            return
+        if self.path.startswith("/api/canvas/assets/"):
+            self._json({"success": True, "message": "", "data": {"deleted": self.path.rsplit("/", 1)[-1]}})
             return
         self._json({"success": False, "message": "preview endpoint not implemented"}, 404)
 

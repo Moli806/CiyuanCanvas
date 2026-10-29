@@ -99,9 +99,9 @@ export function readMediaDimensions(size: string, scale: string, ratio: string) 
     return parsePixelSize(computed) || { width: 0, height: 0 };
 }
 
-export function clampVideoSeconds(value: string) {
+export function clampVideoSeconds(value: string, minSeconds = VIDEO_SECONDS_MIN, maxSeconds = VIDEO_SECONDS_MAX) {
     const seconds = Math.floor(Number(value) || 6);
-    return String(Math.max(VIDEO_SECONDS_MIN, Math.min(VIDEO_SECONDS_MAX, seconds)));
+    return String(Math.max(minSeconds, Math.min(maxSeconds, seconds)));
 }
 
 export function parseVideoResolution(value: string | undefined) {
@@ -109,6 +109,7 @@ export function parseVideoResolution(value: string | undefined) {
     if (raw === "low") return "480";
     if (raw === "auto" || raw === "high" || raw === "medium") return "720";
     const number = raw.replace(/p$/i, "");
+    if (/^\d+k$/.test(number)) return number;
     return /^\d+$/.test(number) && Number(number) > 0 ? number : "720";
 }
 

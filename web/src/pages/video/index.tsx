@@ -128,7 +128,8 @@ export default function VideoPage() {
     const framesMode = Boolean(spec?.frames && effectiveConfig.videoMode === "frames");
     const limits = videoReferenceLimits(spec, framesMode);
     const totalReferences = references.length + videoReferences.length + audioReferences.length;
-    const canGenerate = Boolean(prompt.trim());
+    const omniReferenceMissing = Boolean(spec?.requires_all_refs) && (!references.length || !videoReferences.length || !audioReferences.length);
+    const canGenerate = (Boolean(prompt.trim()) || Boolean(spec?.prompt_optional)) && !omniReferenceMissing;
 
     useEffect(() => {
         if (!running || !startedAt) return;
@@ -331,8 +332,12 @@ export default function VideoPage() {
 
     const buildRequestSnapshot = () => {
         const text = prompt.trim();
-        if (!text) {
+        if (!text && !spec?.prompt_optional) {
             message.error(t("videoWorkbench.promptRequired"));
+            return null;
+        }
+        if (spec?.requires_all_refs && omniReferenceMissing) {
+            message.error(t("videoWorkbench.omniReferenceRequired"));
             return null;
         }
         if (!isAiConfigReady(effectiveConfig, model)) {
@@ -509,17 +514,19 @@ export default function VideoPage() {
                                 <ModelPicker config={effectiveConfig} value={model} onChange={(value) => updateConfig("videoModel", value)} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} />
                             </label>
 
-                            <div>
-                                <div className="mb-2 flex items-center justify-between gap-3">
-                                    <span className="text-base font-semibold">{t("workbench.prompt")}</span>
-                                    <div className="flex gap-2">
-                                        <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => setAssetPickerOpen(true)}>
-                                            {t("workbench.viewAssets")}
-                                        </Button>
+                            {spec?.prompt_optional ? null : (
+                                <div>
+                                    <div className="mb-2 flex items-center justify-between gap-3">
+                                        <span className="text-base font-semibold">{t("workbench.prompt")}</span>
+                                        <div className="flex gap-2">
+                                            <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => setAssetPickerOpen(true)}>
+                                                {t("workbench.viewAssets")}
+                                            </Button>
+                                        </div>
                                     </div>
+                                    <Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={6} placeholder={t("videoWorkbench.promptPlaceholder")} />
                                 </div>
-                                <Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={6} placeholder={t("videoWorkbench.promptPlaceholder")} />
-                            </div>
+                            )}
 
                             {limits.images > 0 ? (
                                 <div className="min-w-0">
@@ -610,6 +617,7 @@ export default function VideoPage() {
                             ) : null}
 
                             {limits.total ? <div className="text-xs text-stone-500">{t("videoWorkbench.totalReferences", { count: totalReferences, limit: limits.total })}</div> : null}
+                            {spec?.requires_all_refs ? <div className="text-xs text-stone-500">{t("videoWorkbench.omniReferenceHint")}</div> : null}
 
                             <VideoSettingsPanel config={effectiveConfig} model={model} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-4" />
                         </div>
@@ -962,12 +970,13 @@ function buildLog({ prompt, model, config, references, videoReferences, audioRef
 }
 
 function buildVideoConfig(config: AiConfig, model: string): AiConfig {
+    const spec = getCiyuanModel(modelOptionName(model))?.video;
     return {
         ...config,
         model,
         videoModel: model,
         size: normalizeVideoSize(config.size),
-        videoSeconds: normalizeVideoSeconds(config.videoSeconds),
+        videoSeconds: normalizeVideoSeconds(config.videoSeconds, spec),
         vquality: normalizeResolution(config.vquality),
         videoGenerateAudio: String(boolConfig(config.videoGenerateAudio, true)),
         videoWatermark: String(boolConfig(config.videoWatermark, false)),
@@ -975,9 +984,9 @@ function buildVideoConfig(config: AiConfig, model: string): AiConfig {
     };
 }
 
-function normalizeVideoSeconds(value: string) {
+function normalizeVideoSeconds(value: string, spec?: CiyuanVideoSpec) {
     if (String(value).trim() === "-1") return "-1";
-    return clampVideoSeconds(value);
+    return clampVideoSeconds(value, spec?.min_seconds, spec?.max_seconds);
 }
 
 function normalizeVideoSize(value: string) {

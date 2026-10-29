@@ -1,4 +1,5 @@
 import axios, { AxiosHeaders, type AxiosRequestConfig, type AxiosResponse } from "axios";
+import { nanoid } from "nanoid";
 
 import { inferMediaRatio, inferMediaScale, inferVideoRatio } from "@/lib/media-size";
 import { imageToDataUrl } from "@/services/image-storage";
@@ -19,6 +20,8 @@ export type CiyuanVideoSpec = {
     max_audios: number;
     max_total_refs?: number;
     needs_video_durations?: boolean;
+    requires_all_refs?: boolean;
+    prompt_optional?: boolean;
     frames: boolean;
     aspect_ratios?: string[];
 };
@@ -48,11 +51,40 @@ export type CiyuanUser = {
     used_quota: number;
 };
 
+export type CiyuanCanvasStorage = {
+    used_bytes: number;
+    quota_bytes: number;
+    asset_count: number;
+    retention_days: number;
+    earliest_expiry: number;
+};
+
+export type CiyuanCanvasAsset = {
+    name: string;
+    kind: string;
+    bytes: number;
+    source: string;
+    created_at: number;
+    last_used_at: number;
+    expires_at: number;
+    url: string;
+};
+
+export type CiyuanServerProject = {
+    id: string;
+    title: string;
+    bytes: number;
+    created_at: number;
+    updated_at: number;
+    data?: unknown;
+};
+
 export type CiyuanBootstrap = {
     user: CiyuanUser;
     quota_per_unit: number;
     models: CiyuanModel[];
     defaults: Partial<Record<CiyuanCapability, string>>;
+    storage?: CiyuanCanvasStorage;
 };
 
 export class CiyuanUnauthorizedError extends Error {
@@ -260,12 +292,14 @@ export async function pollCiyuanVideoTask(config: AiConfig, task: { id: string }
     return { status: "completed", result: { blob } };
 }
 
-export async function requestCiyuanBananaImages(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, signal?: AbortSignal): Promise<string[]> {
+export type CiyuanGeneratedImage = { id: string; dataUrl: string; serverUrl?: string };
+
+export async function requestCiyuanBananaImages(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, signal?: AbortSignal): Promise<CiyuanGeneratedImage[]> {
     if (references.length > 14) throw new Error("banana-2.1 最多支持 14 张参考图");
     const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
     const ratio = bananaRatio(config.size);
     const imageSize = bananaSize(config.size);
-    const results: string[] = [];
+    const results: CiyuanGeneratedImage[] = [];
 
     for (let index = 0; index < count; index += 1) {
         const params: Record<string, unknown> = {};
@@ -277,7 +311,14 @@ export async function requestCiyuanBananaImages(config: AiConfig, prompt: string
         const taskId = String(created.task_id);
         await waitCiyuanTask(config, taskId, signal);
         const blob = await ciyuanGetBlob(config, `/tasks/${encodeURIComponent(taskId)}/artifacts/image/content`, signal);
-        results.push(await blobToDataUrl(blob));
+        const dataUrl = await blobToDataUrl(blob);
+        let serverUrl: string | undefined;
+        try {
+            serverUrl = await uploadCanvasAsset(blob, "banana.png", signal);
+        } catch {
+            serverUrl = undefined;
+        }
+        results.push({ id: `banana_${nanoid(16)}`, dataUrl, serverUrl });
     }
     return results;
 }
@@ -310,6 +351,7 @@ function normalizeVideoResolution(value: string) {
     if (raw === "low") return "480p";
     if (raw === "auto" || raw === "high" || raw === "medium") return "720p";
     const number = raw.replace(/p$/i, "");
+    if (/^\d+k$/.test(number)) return number;
     return /^\d+$/.test(number) ? `${number}p` : "720p";
 }
 
@@ -548,4 +590,56 @@ function delay(ms: number, signal?: AbortSignal) {
             { once: true },
         );
     });
+}
+
+async function canvasJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const response = await sessionRequest(path, init);
+    const payload = (await response.json().catch(() => null)) as { success?: boolean; message?: string; data?: T } | null;
+    if (response.status === 401 || response.status === 403) throw new CiyuanUnauthorizedError();
+    if (!response.ok || !payload?.success) throw new Error(readMessage(payload) || "请求失败");
+    return payload.data as T;
+}
+
+export function fetchCanvasStorage() {
+    return canvasJson<{ storage: CiyuanCanvasStorage; assets: CiyuanCanvasAsset[] }>("/api/canvas/storage", { cache: "no-store" });
+}
+
+export function saveCanvasRetentionDays(retentionDays: number) {
+    return canvasJson<CiyuanCanvasStorage>("/api/canvas/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ retention_days: retentionDays }),
+    });
+}
+
+export function cleanupCanvasServerAssets() {
+    return canvasJson<{ deleted: number; freed: number; storage: CiyuanCanvasStorage }>("/api/canvas/assets/cleanup", { method: "POST" });
+}
+
+export function deleteCanvasServerAsset(name: string) {
+    return canvasJson<{ deleted: string }>(`/api/canvas/assets/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+
+export async function fetchCanvasImageResult(requestId: string): Promise<{ status: string; assets: Array<{ name: string; url: string }> } | null> {
+    const response = await sessionRequest(`/api/canvas/image-results/${encodeURIComponent(requestId)}`, { cache: "no-store" });
+    if (response.status === 404) return null;
+    const payload = (await response.json().catch(() => null)) as { success?: boolean; data?: { status?: string; assets?: Array<{ name: string; url: string }> } } | null;
+    if (!response.ok || !payload?.success || !payload.data) return null;
+    return { status: payload.data.status || "", assets: payload.data.assets || [] };
+}
+
+export function fetchServerCanvasProjects() {
+    return canvasJson<{ projects: CiyuanServerProject[] }>("/api/canvas/projects", { cache: "no-store" });
+}
+
+export function saveServerCanvasProject(id: string, project: unknown) {
+    return canvasJson<{ id: string; bytes: number; saved_at: number }>(`/api/canvas/projects/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(project),
+    });
+}
+
+export function deleteServerCanvasProject(id: string) {
+    return canvasJson<unknown>(`/api/canvas/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
 }

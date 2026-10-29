@@ -43,7 +43,7 @@ export function VideoSettingsPanel({ config, model: modelOverride, onConfigChang
     const modeItems = spec && !spec.frames ? videoModeOptions.filter((item) => item.value === "reference") : videoModeOptions;
     const minSeconds = spec?.min_seconds ?? VIDEO_SECONDS_MIN;
     const maxSeconds = spec?.max_seconds ?? VIDEO_SECONDS_MAX;
-    const seconds = Math.min(maxSeconds, Math.max(minSeconds, Number(clampVideoSeconds(config.videoSeconds || "6"))));
+    const seconds = Number(clampVideoSeconds(config.videoSeconds || "6", minSeconds, maxSeconds));
     const videoMode = normalizeVideoModeValue(config.videoMode);
     const resolution = parseVideoResolution(config.vquality);
     const selectedRatio = inferVideoRatio(config.size || "auto");
@@ -59,7 +59,7 @@ export function VideoSettingsPanel({ config, model: modelOverride, onConfigChang
 
     useEffect(() => {
         if (!spec) return;
-        const rawSeconds = Number(clampVideoSeconds(config.videoSeconds || "6"));
+        const rawSeconds = Number(clampVideoSeconds(config.videoSeconds || "6", spec.min_seconds, spec.max_seconds));
         const nextSeconds = Math.min(spec.max_seconds, Math.max(spec.min_seconds, rawSeconds));
         if (nextSeconds !== rawSeconds) onConfigChange("videoSeconds", String(nextSeconds));
         if (spec.resolutions.length && !spec.resolutions.some((value) => value.replace(/p$/i, "") === resolution)) {

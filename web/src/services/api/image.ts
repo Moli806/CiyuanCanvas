@@ -3,7 +3,8 @@ import axios from "axios";
 import i18n from "@/i18n";
 import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
-import { ciyuanAxios, ciyuanSessionFetch, requestCiyuanBananaImages, requestCiyuanChatQuestion, type CiyuanChatMessage } from "@/services/ciyuan";
+import { ciyuanAxios, ciyuanSessionFetch, requestCiyuanBananaImages, requestCiyuanChatQuestion, uploadCanvasAsset, type CiyuanChatMessage } from "@/services/ciyuan";
+import { beginImageAttempt, finishImageAttempt, resolveAttemptAssets } from "@/services/image-attempts";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
@@ -96,7 +97,17 @@ type GeminiPayload = {
     promptFeedback?: { blockReason?: string };
 };
 type GeminiStreamState = { buffer: string; text: string; toolCalls: ResponseToolCall[]; error?: string };
-type RequestOptions = { signal?: AbortSignal };
+type RequestOptions = { signal?: AbortSignal; requestId?: string };
+
+/** One generated image; serverUrl is the durable copy on our server. */
+export type GeneratedImageItem = { id: string; dataUrl: string; serverUrl?: string };
+
+async function finalizeCanvasAttempt(attemptId: string, images: GeneratedImageItem[]): Promise<GeneratedImageItem[]> {
+    const assets = await resolveAttemptAssets(attemptId, images.length);
+    await finishImageAttempt(attemptId);
+    if (!assets.length) return images;
+    return images.map((image, index) => (assets[index] ? { ...image, serverUrl: assets[index] } : image));
+}
 
 const IMAGE_QUALITY_VALUES = ["low", "medium", "high", "xhigh", "max"];
 const DEFAULT_IMAGE_SHORT_SIDE = 1024;
@@ -221,7 +232,7 @@ function resolveImageSource(item: Record<string, unknown>) {
     return null;
 }
 
-function parseImagePayload(payload: ImageApiResponse) {
+function parseImagePayload(payload: ImageApiResponse): GeneratedImageItem[] {
     if (typeof payload.code === "number" && payload.code !== 0) {
         throw new Error(payload.msg || apiText("requestFailed"));
     }
@@ -702,7 +713,7 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
     return images;
 }
 
-export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
+export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions): Promise<GeneratedImageItem[]> {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const script = resolveModelScript(config, config.model || config.imageModel);
@@ -727,8 +738,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     }
     if (requestConfig.apiFormat === "ciyuan" && requestConfig.model === "banana-2.1") {
         try {
-            const urls = await requestCiyuanBananaImages(requestConfig, withSystemPrompt(requestConfig, prompt), [], n, options?.signal);
-            return urls.map((dataUrl) => ({ id: nanoid(), dataUrl }));
+            return await requestCiyuanBananaImages(requestConfig, withSystemPrompt(requestConfig, prompt), [], n, options?.signal);
         } catch (error) {
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
@@ -754,6 +764,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
         ...(/gpt-image/.test(requestConfig.model) ? {} : { response_format: "b64_json" }),
         output_format: IMAGE_OUTPUT_FORMAT,
     };
+    const attempt = requestConfig.apiFormat === "ciyuan" ? (options?.requestId ? { id: options.requestId } : await beginImageAttempt()) : null;
     try {
         const response =
             requestConfig.apiFormat === "ciyuan"
@@ -761,7 +772,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                       method: "post",
                       url: aiApiUrl(requestConfig, "/images/generations"),
                       data: body,
-                      headers: { "Content-Type": "application/json" },
+                      headers: { "Content-Type": "application/json", ...(attempt ? { "X-Ciyuan-Request-Id": attempt.id } : {}) },
                       signal: options?.signal,
                       timeout: IMAGE_REQUEST_TIMEOUT_MS,
                   })
@@ -771,13 +782,13 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                       timeout: IMAGE_REQUEST_TIMEOUT_MS,
                   });
         const images = await parseImagePayload(response.data);
-        return images;
+        return attempt ? await finalizeCanvasAttempt(attempt.id, images) : images;
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("requestFailed")));
     }
 }
 
-export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions) {
+export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<GeneratedImageItem[]> {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const requestPrompt = buildImageReferencePromptText(prompt, references);
@@ -804,8 +815,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     }
     if (requestConfig.apiFormat === "ciyuan" && requestConfig.model === "banana-2.1") {
         try {
-            const urls = await requestCiyuanBananaImages(requestConfig, withSystemPrompt(requestConfig, requestPrompt), references, n, options?.signal);
-            return urls.map((dataUrl) => ({ id: nanoid(), dataUrl }));
+            return await requestCiyuanBananaImages(requestConfig, withSystemPrompt(requestConfig, requestPrompt), references, n, options?.signal);
         } catch (error) {
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
@@ -843,6 +853,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     const imageField = files.length > 1 ? "image[]" : "image";
     files.forEach((file) => formData.append(imageField, file));
 
+    const attempt = requestConfig.apiFormat === "ciyuan" ? (options?.requestId ? { id: options.requestId } : await beginImageAttempt()) : null;
     try {
         const response =
             requestConfig.apiFormat === "ciyuan"
@@ -850,6 +861,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
                       method: "post",
                       url: aiApiUrl(requestConfig, "/images/edits"),
                       data: formData,
+                      headers: attempt ? { "X-Ciyuan-Request-Id": attempt.id } : undefined,
                       signal: options?.signal,
                       timeout: IMAGE_REQUEST_TIMEOUT_MS,
                   })
@@ -859,7 +871,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
                       timeout: IMAGE_REQUEST_TIMEOUT_MS,
                   });
         const images = await parseImagePayload(response.data);
-        return images;
+        return attempt ? await finalizeCanvasAttempt(attempt.id, images) : images;
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("requestFailed")));
     }

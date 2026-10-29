@@ -1,9 +1,10 @@
 import type { CSSProperties } from "react";
 import { useState } from "react";
 import { Button, Dropdown, Tooltip, type MenuProps } from "antd";
-import { BookOpen, HardDrive, House, KeyRound, LogOut, RefreshCw, UserRound, Wallet } from "lucide-react";
+import { BookOpen, Database, HardDrive, House, KeyRound, LogOut, RefreshCw, UserRound, Wallet } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { CanvasStorageDialog } from "@/components/layout/canvas-storage-dialog";
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
 import { changeAppLocale, type AppLocale } from "@/i18n";
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -27,6 +28,7 @@ export function CiyuanUserActions({ variant = "default", showPreferences = true 
     const displayName = user?.display_name || user?.username || t("ciyuan.account");
     const [usage, setUsage] = useState<LocalStorageUsage | null>(null);
     const [usageLoading, setUsageLoading] = useState(false);
+    const [storageOpen, setStorageOpen] = useState(false);
 
     const loadUsage = async () => {
         setUsageLoading(true);
@@ -59,6 +61,7 @@ export function CiyuanUserActions({ variant = "default", showPreferences = true 
         },
         { key: "refresh", icon: <RefreshCw className="size-4" />, label: t("ciyuan.refresh") },
         { key: "storage", disabled: true, icon: <HardDrive className="size-4" />, label: storageLabel },
+        { key: "serverStorage", icon: <Database className="size-4" />, label: t("ciyuan.serverStorage") },
         { type: "divider" },
         { key: "wallet", icon: <Wallet className="size-4" />, label: t("ciyuan.wallet") },
         { key: "keys", icon: <KeyRound className="size-4" />, label: t("ciyuan.keys") },
@@ -71,6 +74,10 @@ export function CiyuanUserActions({ variant = "default", showPreferences = true 
     const onMenuClick: MenuProps["onClick"] = ({ key }) => {
         if (key === "refresh") {
             void refresh(true);
+            return;
+        }
+        if (key === "serverStorage") {
+            setStorageOpen(true);
             return;
         }
         if (key === "wallet") window.location.assign("/wallet");
@@ -127,6 +134,7 @@ export function CiyuanUserActions({ variant = "default", showPreferences = true 
                     </span>
                 </Button>
             </Dropdown>
+            <CanvasStorageDialog open={storageOpen} onClose={() => setStorageOpen(false)} />
         </div>
     );
 }

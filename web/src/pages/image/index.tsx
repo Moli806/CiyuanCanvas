@@ -10,7 +10,11 @@ import { ModelPicker } from "@/components/model-picker";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
+import { stageGeneratedImage } from "@/services/generated-image";
+import { beginImageAttempt, finishImageAttempt } from "@/services/image-attempts";
+import { fetchCanvasImageResult } from "@/services/ciyuan";
 import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { useCiyuanStore } from "@/stores/use-ciyuan-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
@@ -22,6 +26,7 @@ import type { ReferenceImage } from "@/types/image";
 import i18n from "@/i18n";
 
 type GeneratedImage = {
+    serverUrl?: string;
     id: string;
     dataUrl: string;
     storageKey?: string;
@@ -54,8 +59,10 @@ type GenerationLog = {
     imageCount: number;
     size: string;
     quality: string;
-    status: "success" | "failed";
+    status: "pending" | "success" | "failed";
     images: GeneratedImage[];
+    requestIds?: string[];
+    error?: string;
 };
 
 type GenerationLogConfig = Pick<AiConfig, "model" | "imageModel" | "quality" | "size" | "count">;
@@ -65,6 +72,7 @@ type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => 
 const LOG_STORE_KEY = "infinite-canvas:image_generation_logs";
 const RESULT_ACTION_BUTTON_CLASS = "min-w-0 px-1.5 [&_.ant-btn-icon]:shrink-0 [&>span:last-child]:min-w-0 [&>span:last-child]:truncate";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
+const settlingLogIds = new Set<string>();
 
 export default function ImagePage() {
     const { message } = App.useApp();
@@ -102,6 +110,13 @@ export default function ImagePage() {
     const model = effectiveConfig.imageModel || effectiveConfig.model;
     const canGenerate = Boolean(prompt.trim());
     const generationCount = Math.max(1, Math.min(10, Number(config.count) || 1));
+    const recoveredImages = useCiyuanStore((state) => state.recoveredImages);
+
+    useEffect(() => {
+        if (recoveredImages <= 0) return;
+        message.success(t("imageWorkbench.recovered", { count: recoveredImages }));
+        useCiyuanStore.getState().setRecoveredImages(0);
+    }, [recoveredImages, message, t]);
 
     useEffect(() => {
         if (!running || !startedAt) return;
@@ -175,7 +190,26 @@ export default function ImagePage() {
         const batchStartedAt = performance.now();
         setStartedAt(batchStartedAt);
 
-        const tasks = Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot));
+        const logId = nanoid();
+        const attempts = await Promise.all(Array.from({ length: generationCount }, () => beginImageAttempt("workbench")));
+        const requestIds = attempts.map((attempt) => attempt.id);
+        await saveLog(
+            buildLog({
+                id: logId,
+                prompt: text,
+                model,
+                config: { ...snapshot.config, count: String(generationCount) },
+                references: snapshot.references,
+                durationMs: 0,
+                successCount: 0,
+                failCount: 0,
+                status: "pending",
+                images: [],
+                requestIds,
+            }),
+        );
+
+        const tasks = Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot, requestIds[index]));
 
         const result = await Promise.allSettled(tasks);
         const successImages = result.filter((item): item is PromiseFulfilledResult<GeneratedImage> => item.status === "fulfilled").map((item) => item.value);
@@ -186,8 +220,9 @@ export default function ImagePage() {
         if (agentTaskId) updateAgentTask(agentTaskId, { status: successCount ? "succeeded" : "failed", successCount, failCount, error: successCount ? undefined : error });
 
         try {
-            saveLog(
+            await saveLog(
                 buildLog({
+                    id: logId,
                     prompt: text,
                     model,
                     config: { ...snapshot.config, count: String(generationCount) },
@@ -197,6 +232,8 @@ export default function ImagePage() {
                     failCount,
                     status: successCount ? "success" : "failed",
                     images: successImages,
+                    requestIds,
+                    error,
                 }),
             );
             successCount ? message.success(t("imageWorkbench.generated")) : message.error(failed?.reason instanceof Error ? failed.reason.message : t("workbench.generationFailed"));
@@ -284,11 +321,87 @@ export default function ImagePage() {
         setDeleteConfirmOpen(false);
     };
 
-    const saveLog = (log: GenerationLog) => {
-        void logStore.setItem(log.id, serializeLog(log)).then(refreshLogs);
+    const saveLog = async (log: GenerationLog) => {
+        await logStore.setItem(log.id, serializeLog(log));
+        await refreshLogs();
     };
 
-    const refreshLogs = async () => setLogs(await readStoredLogs());
+    const syncPreview = (log: GenerationLog) => {
+        setPreviewLog((current) => (current?.id === log.id ? log : current));
+        setResults((current) => {
+            if (!current.some((item) => item.id === log.id)) return current;
+            if (log.images.length) return log.images.map((image) => ({ id: image.id, status: "success" as const, image }));
+            if (log.status === "failed") return [{ id: log.id, status: "failed" as const, error: log.error || t("workbench.generationFailed") }];
+            return [{ id: log.id, status: "pending" as const }];
+        });
+    };
+
+    const refreshLogs = async () => {
+        const stored = await readStoredLogs();
+        setLogs(stored);
+        for (const log of stored) {
+            if (log.status === "pending") void settlePendingLog(log);
+        }
+    };
+
+    // A pending record is written before the request leaves, so it survives a
+    // refresh. On load, ask the server for each attempt: a finished image is
+    // recovered from the asset store, a missing one marks the record failed so
+    // the user sees the outcome instead of a silently empty workbench.
+    const settlePendingLog = async (log: GenerationLog) => {
+        if (settlingLogIds.has(log.id)) return;
+        settlingLogIds.add(log.id);
+        try {
+            await settlePendingLogInner(log);
+        } finally {
+            settlingLogIds.delete(log.id);
+        }
+    };
+
+    const settlePendingLogInner = async (log: GenerationLog) => {
+        const ids = log.requestIds || [];
+        if (!ids.length || Date.now() - log.createdAt > 11 * 60_000) {
+            for (const id of ids) await finishImageAttempt(id);
+            const failed = { ...log, status: "failed" as const, failCount: log.config.count ? Number(log.config.count) : 1, error: t("imageWorkbench.interrupted") };
+            await saveLog(failed);
+            syncPreview(failed);
+            return;
+        }
+        // The server keeps a request alive for at most 10 minutes; after that a
+        // missing result really means the attempt failed.
+        const deadline = Date.now() + 10.5 * 60_000;
+        for (;;) {
+            const results = await Promise.all(ids.map((id) => fetchCanvasImageResult(id).catch(() => null)));
+            const images: GeneratedImage[] = [];
+            for (const result of results) {
+                if (result?.status !== "completed") continue;
+                for (const asset of result.assets) {
+                    const url = new URL(asset.url, window.location.origin).toString();
+                    try {
+                        const stored = await uploadImage(url);
+                        images.push({ id: nanoid(), dataUrl: url, serverUrl: url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType, durationMs: 0 });
+                    } catch {
+                        images.push({ id: nanoid(), dataUrl: url, serverUrl: url, width: 0, height: 0, bytes: 0, mimeType: "image/png", durationMs: 0 });
+                    }
+                }
+            }
+            if (images.length) {
+                for (const id of ids) await finishImageAttempt(id);
+                const done = { ...log, status: (images.length >= ids.length ? "success" : "failed") as GenerationLog["status"], images, successCount: images.length, failCount: Math.max(0, ids.length - images.length), durationMs: Date.now() - log.createdAt, error: undefined };
+                await saveLog(done);
+                syncPreview(done);
+                return;
+            }
+            if (Date.now() > deadline) {
+                for (const id of ids) await finishImageAttempt(id);
+                const failed = { ...log, status: "failed" as const, failCount: ids.length, durationMs: Date.now() - log.createdAt, error: t("imageWorkbench.interrupted") };
+                await saveLog(failed);
+                syncPreview(failed);
+                return;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 10_000));
+        }
+    };
 
     const previewGenerationLog = async (log: GenerationLog) => {
         setPreviewLog(log);
@@ -299,7 +412,15 @@ export default function ImagePage() {
         if (log.config.quality) updateConfig("quality", log.config.quality);
         if (log.config.size) updateConfig("size", log.config.size);
         if (log.config.count) updateConfig("count", log.config.count);
-        setResults(log.images.map((image) => ({ id: image.id, status: "success", image })));
+        setResults(
+            log.images.length
+                ? log.images.map((image) => ({ id: image.id, status: "success" as const, image }))
+                : log.status === "failed"
+                  ? [{ id: log.id, status: "failed" as const, error: log.error || t("workbench.generationFailed") }]
+                  : log.status === "pending"
+                    ? [{ id: log.id, status: "pending" as const }]
+                    : [],
+        );
     };
 
     const buildRequestSnapshot = () => {
@@ -316,14 +437,14 @@ export default function ImagePage() {
         return { text, config: { ...effectiveConfig, model, count: "1" }, references: [...references] };
     };
 
-    const runGenerationSlot = async (index: number, snapshot: { text: string; config: AiConfig; references: ReferenceImage[] }) => {
+    const runGenerationSlot = async (index: number, snapshot: { text: string; config: AiConfig; references: ReferenceImage[] }, requestId?: string) => {
         const itemStartedAt = performance.now();
         try {
-            const result = snapshot.references.length ? await requestEdit(snapshot.config, snapshot.text, snapshot.references) : await requestGeneration(snapshot.config, snapshot.text);
+            const result = snapshot.references.length ? await requestEdit(snapshot.config, snapshot.text, snapshot.references, { requestId }) : await requestGeneration(snapshot.config, snapshot.text, { requestId });
             const image = result[0];
             if (!image) throw new Error(t("imageWorkbench.missingResult"));
-            const stored = await uploadImage(image.dataUrl);
-            const nextImage: GeneratedImage = { id: image.id, dataUrl: stored.url, ...(stored.storageKey ? { storageKey: stored.storageKey } : {}), durationMs: performance.now() - itemStartedAt, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
+            const stored = await stageGeneratedImage(image);
+            const nextImage: GeneratedImage = { id: image.id, dataUrl: image.serverUrl || stored.url, ...(stored.storageKey ? { storageKey: stored.storageKey } : {}), durationMs: performance.now() - itemStartedAt, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
             setResults((value) => updateResultAt(value, index, { status: "success", image: nextImage }));
             return nextImage;
         } catch (error) {
@@ -338,10 +459,32 @@ export default function ImagePage() {
         setPreviewLog(null);
         setResults((value) => updateResultAt(value, index, { status: "pending", error: undefined, image: undefined }));
         const retryStartedAt = performance.now();
+        // A retry is a paid attempt of its own: persist the pending record and
+        // its request id before the request leaves, exactly like 开始生成, so a
+        // refresh during the retry keeps the progress visible.
+        const logId = nanoid();
+        const attempt = await beginImageAttempt("workbench");
+        const requestIds = [attempt.id];
+        await saveLog(
+            buildLog({
+                id: logId,
+                prompt: snapshot.text,
+                model,
+                config: { ...snapshot.config, count: "1" },
+                references: snapshot.references,
+                durationMs: 0,
+                successCount: 0,
+                failCount: 0,
+                status: "pending",
+                images: [],
+                requestIds,
+            }),
+        );
         try {
-            const image = await runGenerationSlot(index, snapshot);
-            saveLog(
+            const image = await runGenerationSlot(index, snapshot, attempt.id);
+            await saveLog(
                 buildLog({
+                    id: logId,
                     prompt: snapshot.text,
                     model,
                     config: { ...snapshot.config, count: "1" },
@@ -351,11 +494,27 @@ export default function ImagePage() {
                     failCount: 0,
                     status: "success",
                     images: [image],
+                    requestIds,
                 }),
             );
             message.success(t("workbench.retrySuccess"));
-        } catch {
-            // runGenerationSlot has already marked the result as failed.
+        } catch (error) {
+            await saveLog(
+                buildLog({
+                    id: logId,
+                    prompt: snapshot.text,
+                    model,
+                    config: { ...snapshot.config, count: "1" },
+                    references: snapshot.references,
+                    durationMs: performance.now() - retryStartedAt,
+                    successCount: 0,
+                    failCount: 1,
+                    status: "failed",
+                    images: [],
+                    requestIds,
+                    error: error instanceof Error ? error.message : t("workbench.generationFailed"),
+                }),
+            );
         }
     };
 
@@ -673,6 +832,11 @@ function LogPanel({
     onPreviewLog: (log: GenerationLog) => void;
 }) {
     const { t } = useTranslation();
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        const timer = window.setInterval(() => setNow(Date.now()), 1000);
+        return () => window.clearInterval(timer);
+    }, []);
     const allSelected = Boolean(logs.length) && selectedLogIds.length === logs.length;
     const toggleAll = () => onSelectedLogIdsChange(allSelected ? [] : logs.map((log) => log.id));
 
@@ -704,6 +868,7 @@ function LogPanel({
                         active={activeLogId === log.id}
                         onSelectedChange={(checked) => onSelectedLogIdsChange(checked ? [...selectedLogIds, log.id] : selectedLogIds.filter((id) => id !== log.id))}
                         onClick={() => onPreviewLog(log)}
+                        now={now}
                     />
                 ))}
                 {!logs.length ? <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed border-stone-300 text-center text-sm text-stone-500 dark:border-stone-700">{t("workbench.noLogs")}</div> : null}
@@ -712,7 +877,7 @@ function LogPanel({
     );
 }
 
-function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: GenerationLog; selected: boolean; active: boolean; onSelectedChange: (checked: boolean) => void; onClick: () => void }) {
+function LogCard({ log, selected, active, onSelectedChange, onClick, now }: { log: GenerationLog; selected: boolean; active: boolean; onSelectedChange: (checked: boolean) => void; onClick: () => void; now: number }) {
     const { t } = useTranslation();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const thumbnails = log.images.filter((image) => image.dataUrl).slice(0, 4);
@@ -739,8 +904,8 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
                 </div>
                 <div className="grid justify-items-end gap-2">
                     <div className="flex gap-1">
-                        <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="blue">
-                            {t("workbench.successCount", { count: log.successCount ?? log.imageCount })}
+                        <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color={log.status === "pending" ? "processing" : log.status === "failed" ? "red" : "blue"}>
+                            {log.status === "pending" ? t("workbench.generating") : log.status === "failed" ? t("workbench.failed") : t("workbench.successCount", { count: log.successCount ?? log.imageCount })}
                         </Tag>
                         {log.failCount ? (
                             <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="red">
@@ -750,8 +915,8 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
                     </div>
                     <div className="flex flex-wrap justify-end gap-1">
                         <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none">{t("workbench.itemCount", { count: log.imageCount })}</Tag>
-                        <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="green">
-                            {formatDuration(log.durationMs)}
+                        <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color={log.status === "pending" ? "processing" : "green"}>
+                            {formatDuration(log.status === "pending" ? Math.max(0, now - log.createdAt) : log.durationMs)}
                         </Tag>
                     </div>
                     <div className="flex justify-end">
@@ -806,8 +971,10 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         imageCount: log.imageCount || log.successCount || 0,
         size: log.size || config.size || "",
         quality: log.quality || config.quality || "",
-        status: log.status || "success",
+        status: log.status === "pending" || log.status === "failed" ? log.status : "success",
         images,
+        requestIds: log.requestIds,
+        error: log.error,
     };
 }
 
@@ -848,6 +1015,7 @@ function ReferenceOrderButtons({ index, total, onMove }: { index: number; total:
 }
 
 function buildLog({
+    id,
     prompt,
     model,
     config,
@@ -857,7 +1025,10 @@ function buildLog({
     failCount,
     status,
     images,
+    requestIds,
+    error,
 }: {
+    id?: string;
     prompt: string;
     model: string;
     config: GenerationLogConfig;
@@ -867,6 +1038,8 @@ function buildLog({
     failCount: number;
     status: GenerationLog["status"];
     images: GeneratedImage[];
+    requestIds?: string[];
+    error?: string;
 }): GenerationLog {
     const logConfig = {
         model: config.model,
@@ -876,7 +1049,7 @@ function buildLog({
         count: config.count,
     };
     return {
-        id: nanoid(),
+        id: id || nanoid(),
         createdAt: Date.now(),
         title: prompt.slice(0, 12) || i18n.t("workbench.untitled"),
         prompt,
@@ -892,5 +1065,7 @@ function buildLog({
         quality: logConfig.quality,
         status,
         images,
+        requestIds,
+        error,
     };
 }

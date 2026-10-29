@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 
 import { BrandLogo } from "@/components/layout/brand-logo";
 import { useCiyuanStore } from "@/stores/use-ciyuan-store";
+import { pullAndMergeCanvasProjects } from "@/services/canvas-project-sync";
+import { resumeImageAttempts } from "@/services/image-attempts";
 
 export function CiyuanGate({ children }: { children: ReactNode }) {
     const { t } = useTranslation();
@@ -19,6 +21,19 @@ export function CiyuanGate({ children }: { children: ReactNode }) {
         const storage = navigator.storage;
         if (storage?.persist) void storage.persist().catch(() => undefined);
     }, []);
+
+    useEffect(() => {
+        if (status !== "ready") return;
+        let cancelled = false;
+        void (async () => {
+            await pullAndMergeCanvasProjects().catch(() => undefined);
+            const recovered = await resumeImageAttempts().catch(() => 0);
+            if (!cancelled && recovered > 0) useCiyuanStore.getState().setRecoveredImages(recovered);
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [status]);
 
     useEffect(() => {
         if (status !== "unauthenticated") return;

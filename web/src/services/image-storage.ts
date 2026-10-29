@@ -12,6 +12,8 @@ export type UploadedImage = {
     height: number;
     bytes: number;
     mimeType: string;
+    /** Durable server copy; node content falls back to it when the local cache is gone. */
+    serverUrl?: string;
 };
 
 const store = localforage.createInstance({ name: "infinite-canvas", storeName: "image_files" });

@@ -7,7 +7,7 @@ import { clampVideoSeconds, computeVideoSize, inferVideoRatio } from "@/lib/medi
 import { getMediaBlob, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
-import { createCiyuanVideoTask, pollCiyuanVideoTask } from "@/services/ciyuan";
+import { createCiyuanVideoTask, pollCiyuanVideoTask, uploadCanvasAsset } from "@/services/ciyuan";
 import { runModelPlugin } from "./model-plugin";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -139,6 +139,12 @@ function videoPluginResult(result: unknown): VideoGenerationResult {
 }
 
 export async function storeGeneratedVideo(result: VideoGenerationResult): Promise<UploadedFile> {
+    const stored = await storeVideoLocally(result);
+    const serverUrl = await mirrorMedia(stored, result);
+    return serverUrl ? { ...stored, serverUrl } : stored;
+}
+
+async function storeVideoLocally(result: VideoGenerationResult): Promise<UploadedFile> {
     if (result.blob) return uploadMediaFile(result.blob, "video");
     if (result.url) {
         try {
@@ -148,6 +154,22 @@ export async function storeGeneratedVideo(result: VideoGenerationResult): Promis
         }
     }
     throw new Error(apiText("noPlayableVideo"));
+}
+
+// The generated video must survive the browser closing, so the server keeps a
+// copy next to the canvas reference assets; the IndexedDB blob is only a cache.
+async function mirrorMedia(stored: UploadedFile, result: VideoGenerationResult): Promise<string | undefined> {
+    try {
+        if (result.blob) return await uploadCanvasAsset(result.blob, "video.mp4");
+        if (stored.storageKey) {
+            const blob = await getMediaBlob(stored.storageKey);
+            if (blob) return await uploadCanvasAsset(blob, "video.mp4");
+        }
+        if (result.url) return await uploadCanvasAsset(result.url, "video.mp4");
+    } catch {
+        return undefined;
+    }
+    return undefined;
 }
 
 async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
@@ -343,6 +365,7 @@ function normalizeVideoResolution(value: string) {
     if (value === "low") return "480p";
     if (value === "auto" || value === "high" || value === "medium") return "720p";
     const resolution = value.replace(/p$/i, "") || "720";
+    if (/^\d+k$/.test(resolution)) return resolution;
     return `${resolution}p`;
 }
 

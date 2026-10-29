@@ -3,10 +3,12 @@ import { create } from "zustand";
 import { createModelChannel, encodeChannelModel, modelOptionsFromChannels, useConfigStore } from "@/stores/use-config-store";
 import {
     CiyuanUnauthorizedError,
+    fetchCanvasStorage,
     fetchCiyuanBootstrap,
     logoutCiyuan,
     setCiyuanCatalog,
     type CiyuanBootstrap,
+    type CiyuanCanvasStorage,
     type CiyuanCapability,
     type CiyuanModel,
     type CiyuanUser,
@@ -20,7 +22,12 @@ type CiyuanState = {
     models: CiyuanModel[];
     quotaPerUnit: number;
     error: string;
+    storage: CiyuanCanvasStorage | null;
+    recoveredImages: number;
     refresh: (silent?: boolean) => Promise<void>;
+    refreshStorage: () => Promise<void>;
+    setStorage: (storage: CiyuanCanvasStorage) => void;
+    setRecoveredImages: (count: number) => void;
     logout: () => Promise<void>;
 };
 
@@ -93,6 +100,8 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
     models: [],
     quotaPerUnit: 500000,
     error: "",
+    storage: null,
+    recoveredImages: 0,
 
     refresh: (silent = false) => {
         if (refreshPromise) return refreshPromise;
@@ -108,6 +117,7 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
                     models: data.models,
                     quotaPerUnit: data.quota_per_unit,
                     error: "",
+                    ...(data.storage ? { storage: data.storage } : {}),
                 });
             } catch (error) {
                 if (error instanceof CiyuanUnauthorizedError) {
@@ -125,9 +135,18 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
         return promise;
     },
 
+    refreshStorage: async () => {
+        const { storage } = await fetchCanvasStorage();
+        set({ storage });
+    },
+
+    setStorage: (storage) => set({ storage }),
+
+    setRecoveredImages: (count) => set({ recoveredImages: count }),
+
     logout: async () => {
         await logoutCiyuan();
         clearConfigToken();
-        set({ status: "unauthenticated", user: null, models: [], error: "" });
+        set({ status: "unauthenticated", user: null, models: [], error: "", storage: null, recoveredImages: 0 });
     },
 }));

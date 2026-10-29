@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
 import { getCiyuanModel } from "@/services/ciyuan";
 import { type CanvasTheme } from "@/lib/canvas-theme";
-import { computeMediaSize, inferMediaRatio, inferMediaScale, mediaRatioOptions, mediaScaleOptions, readMediaDimensions } from "@/lib/media-size";
+import { computeMediaSize, imageSizePresets, inferMediaRatio, inferMediaScale, mediaRatioOptions, mediaScaleOptions, readMediaDimensions } from "@/lib/media-size";
 import { modelOptionName, type AiConfig } from "@/stores/use-config-store";
 
 const qualityOptions = [
@@ -17,6 +17,7 @@ const qualityOptions = [
     { value: "max", labelKey: "max" },
 ];
 const DIMENSION_STEP = 16;
+const presetSizes = new Set(Object.values(imageSizePresets).flatMap((row) => Object.values(row)));
 
 export const imageQualityOptions = qualityOptions.map((item) => ({ value: item.value, get label() { return i18n.t(`settingsPanels.common.${item.labelKey}`); } }));
 export const imageAspectOptions = mediaRatioOptions.map((item) => ({ value: item.value, label: item.value === "auto" ? i18n.t("settingsPanels.common.auto") : item.value }));
@@ -77,10 +78,14 @@ export function ImageSettingsPanel({ config, model: modelOverride, onConfigChang
         }
         if (nextScale !== selectedScale || nextRatio !== selectedRatio) {
             onConfigChange("size", computeMediaSize(nextScale, nextRatio));
+        } else if (/^\d+x\d+$/.test(activeSize) && !presetSizes.has(activeSize)) {
+            // Spec models only offer preset sizes, so an arbitrary pixel size (agents, older panels,
+            // imported logs) would surface as the nearest tier while the real request kept failing.
+            onConfigChange("size", computeMediaSize(selectedScale, selectedRatio));
         }
         if (rawCount > effectiveMaxCount) onConfigChange("count", String(effectiveMaxCount));
         if (!showBackground && transparentBackground) onConfigChange("background", "");
-    }, [spec, quality, selectedScale, selectedRatio, rawCount, effectiveMaxCount, showBackground, transparentBackground, onConfigChange]);
+    }, [spec, quality, selectedScale, selectedRatio, activeSize, rawCount, effectiveMaxCount, showBackground, transparentBackground, onConfigChange]);
 
     return (
         <ImageSettingsTheme theme={theme}>

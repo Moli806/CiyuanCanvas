@@ -61,6 +61,9 @@ const canvasStorage: PersistStorage<CanvasStore> = {
         saveTimer = setTimeout(() => {
             saveTimer = null;
             void localForageStorage.setItem(name, JSON.stringify(value));
+            void import("@/services/canvas-project-sync").then(({ scheduleCanvasSync }) => {
+                scheduleCanvasSync(nextState.projects, nextState.deletedProjects.map((item) => item.id));
+            });
         }, 400);
     },
     removeItem: (name) => localForageStorage.removeItem(name),

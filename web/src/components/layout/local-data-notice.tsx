@@ -3,10 +3,13 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
+import { useCiyuanStore } from "@/stores/use-ciyuan-store";
+
 const DISMISS_KEY = "ciyuan-canvas:local-data-notice-dismissed";
 
 export function LocalDataNotice() {
     const { t } = useTranslation();
+    const retentionDays = useCiyuanStore((state) => state.storage?.retention_days);
     const [dismissed, setDismissed] = useState(() => window.sessionStorage.getItem(DISMISS_KEY) === "1");
 
     if (dismissed) return null;
@@ -22,7 +25,7 @@ export function LocalDataNotice() {
             className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs leading-5 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/35 dark:text-amber-200"
         >
             <Info className="size-3.5 shrink-0" aria-hidden="true" />
-            <span>{t("localDataNotice.text")}</span>
+            <span>{t("localDataNotice.text", { days: retentionDays ?? 7 })}</span>
             <Link className="font-medium underline underline-offset-2" to="/assets">
                 {t("localDataNotice.action")}
             </Link>
