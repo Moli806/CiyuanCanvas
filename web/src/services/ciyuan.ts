@@ -162,16 +162,27 @@ export function ciyuanSessionFetch(path: string, init: RequestInit = {}) {
     return sessionRequest(path, init);
 }
 
+function isSameOriginRequest(config: AxiosRequestConfig): boolean {
+    try {
+        const resolved = new URL(config.url ?? "", config.baseURL || window.location.origin);
+        return resolved.origin === window.location.origin;
+    } catch {
+        return false;
+    }
+}
+
 export async function ciyuanAxios<T = unknown>(config: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+    // 渠道 baseUrl 可被改成外部域；会话令牌只随同源请求发送，避免外泄到第三方主机。
+    const sameOrigin = isSameOriginRequest(config);
     const run = async () => {
         const headers = new AxiosHeaders(config.headers as Record<string, string> | undefined);
-        headers.set("Authorization", `Bearer ${await getSessionAccessToken()}`);
+        if (sameOrigin) headers.set("Authorization", `Bearer ${await getSessionAccessToken()}`);
         return axios.request<T>({ ...config, headers });
     };
     try {
         return await run();
     } catch (error) {
-        if (axios.isAxiosError(error) && error.response?.status === 401) {
+        if (sameOrigin && axios.isAxiosError(error) && error.response?.status === 401) {
             sessionAccessToken = null;
             return run();
         }
