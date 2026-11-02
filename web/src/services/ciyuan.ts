@@ -106,6 +106,7 @@ export function getCiyuanModel(id: string) {
 }
 
 let sessionAccessToken: { value: string; expiresAt: number } | null = null;
+let inflightRefresh: Promise<string> | null = null;
 
 async function refreshSessionAccessToken(): Promise<string> {
     const response = await fetch("/api/user/auth/refresh", {
@@ -137,12 +138,21 @@ async function refreshSessionAccessToken(): Promise<string> {
     return payload.data.access_token;
 }
 
+function refreshSessionOnce(): Promise<string> {
+    if (!inflightRefresh) {
+        inflightRefresh = refreshSessionAccessToken().finally(() => {
+            inflightRefresh = null;
+        });
+    }
+    return inflightRefresh;
+}
+
 async function getSessionAccessToken(force = false): Promise<string> {
     if (!force && sessionAccessToken) {
         const freshUntil = Math.floor(Date.now() / 1000) + 30;
         if (!sessionAccessToken.expiresAt || sessionAccessToken.expiresAt > freshUntil) return sessionAccessToken.value;
     }
-    return refreshSessionAccessToken();
+    return refreshSessionOnce();
 }
 
 async function sessionRequest(path: string, init: RequestInit = {}): Promise<Response> {
@@ -204,6 +214,7 @@ export async function fetchCiyuanBootstrap(): Promise<CiyuanBootstrap> {
 
 export async function logoutCiyuan() {
     sessionAccessToken = null;
+    inflightRefresh = null;
     await fetch("/api/user/auth/logout", { method: "POST", credentials: "include" }).catch(() => undefined);
 }
 

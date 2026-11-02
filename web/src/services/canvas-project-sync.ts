@@ -49,7 +49,20 @@ async function flushCanvasSync() {
         }
     } finally {
         flushing = false;
+        // Edits can be queued while an upload is in flight; run them now.
+        if (queue) void flushCanvasSync();
     }
+}
+
+/** Drop all local sync bookkeeping so the next account starts clean. */
+export function resetCanvasSyncState() {
+    if (timer) {
+        clearTimeout(timer);
+        timer = null;
+    }
+    queue = null;
+    syncedUpdatedAt.clear();
+    sentDeletes.clear();
 }
 
 function waitForCanvasHydration(store: { getState: () => { hydrated: boolean }; subscribe: (listener: (state: { hydrated: boolean }) => void) => () => void }): Promise<void> {
@@ -73,37 +86,47 @@ export async function pullAndMergeCanvasProjects(): Promise<number> {
     const { useCanvasStore } = await import("@/stores/canvas/use-canvas-store");
     await waitForCanvasHydration(useCanvasStore);
     const { projects: serverProjects } = await fetchServerCanvasProjects();
-    const state = useCanvasStore.getState();
-    const tombstoned = new Set(state.deletedProjects.map((project) => project.id));
+    const before = useCanvasStore.getState();
+    const tombstoned = new Set(before.deletedProjects.map((project) => project.id));
+    const localById = new Map(before.projects.map((project) => [project.id, project]));
     for (const meta of serverProjects) {
         if (tombstoned.has(meta.id)) void deleteServerCanvasProject(meta.id).catch(() => undefined);
     }
-    const merged = [...state.projects];
-    const indexById = new Map(merged.map((project, index) => [project.id, index]));
-    let inserted = 0;
+    const fetched: CanvasProject[] = [];
     for (const meta of serverProjects) {
         if (tombstoned.has(meta.id)) continue;
-        const index = indexById.get(meta.id);
-        const local = index === undefined ? undefined : merged[index];
-        const serverNewer = meta.updated_at * 1000 > Date.parse(local?.updatedAt || "") ;
-        if (local && !serverNewer) continue;
+        const local = localById.get(meta.id);
+        if (local && Date.parse(local.updatedAt) >= meta.updated_at * 1000) continue;
         try {
             const full = await getServerCanvasProject(meta.id);
             const project = full?.data as CanvasProject | undefined;
-            if (!project?.id || !project.updatedAt) continue;
-            if (index === undefined) {
-                merged.push(project);
-                inserted += 1;
-            } else {
-                merged[index] = project;
-            }
-            syncedUpdatedAt.set(project.id, project.updatedAt);
+            if (project?.id && project.updatedAt) fetched.push(project);
         } catch {
             // Skip unreadable payloads; the next pull retries.
         }
     }
-    if (inserted > 0 || merged.length !== state.projects.length) {
-        useCanvasStore.setState({ projects: merged });
+    // Merge against the store as it is right before applying, so edits made
+    // while the payloads were downloading are not overwritten.
+    const state = useCanvasStore.getState();
+    const skip = new Set(state.deletedProjects.map((project) => project.id));
+    const merged = [...state.projects];
+    const indexById = new Map(merged.map((project, index) => [project.id, index]));
+    let changed = 0;
+    for (const project of fetched) {
+        if (skip.has(project.id)) continue;
+        const index = indexById.get(project.id);
+        if (index === undefined) {
+            indexById.set(project.id, merged.length);
+            merged.push(project);
+            changed += 1;
+            syncedUpdatedAt.set(project.id, project.updatedAt);
+            continue;
+        }
+        if (Date.parse(merged[index].updatedAt) >= Date.parse(project.updatedAt)) continue;
+        merged[index] = project;
+        changed += 1;
+        syncedUpdatedAt.set(project.id, project.updatedAt);
     }
-    return inserted;
+    if (changed > 0) useCanvasStore.setState({ projects: merged });
+    return changed;
 }

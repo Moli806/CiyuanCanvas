@@ -4,6 +4,7 @@ import ClaudeColor from "@lobehub/icons/es/Claude/components/Color";
 import DeepSeekColor from "@lobehub/icons/es/DeepSeek/components/Color";
 import DoubaoColor from "@lobehub/icons/es/Doubao/components/Color";
 import GeminiColor from "@lobehub/icons/es/Gemini/components/Color";
+import GrokMono from "@lobehub/icons/es/Grok/components/Mono";
 import KlingColor from "@lobehub/icons/es/Kling/components/Color";
 import MinimaxColor from "@lobehub/icons/es/Minimax/components/Color";
 import NanoBananaColor from "@lobehub/icons/es/NanoBanana/components/Color";
@@ -40,6 +41,10 @@ const ICONS: Record<string, BrandIcon> = {
     "Zhipu.Color": ZhipuColor,
     DeepSeek: DeepSeekColor,
     "DeepSeek.Color": DeepSeekColor,
+    Grok: GrokMono,
+    "Grok.Color": GrokMono,
+    XAI: GrokMono,
+    "XAI.Color": GrokMono,
 };
 
 export function ModelBrandIcon({ icon, size = 16 }: { icon?: string; size?: number }) {

@@ -95,11 +95,14 @@ export async function mirrorGeneratedMedia(blob: Blob, name: string): Promise<st
 
 /** Logout must not leak one account's canvas data to the next login. */
 export async function clearCanvasLocalData(): Promise<void> {
-    const { useCanvasStore } = await import("@/stores/canvas/use-canvas-store");
+    const { useCanvasStore, cancelPendingCanvasPersist } = await import("@/stores/canvas/use-canvas-store");
     const { useAssetStore } = await import("@/stores/use-asset-store");
-    // Drop the in-memory state first, then the persisted keys and every blob
-    // cache, and wait for all of it: a 400ms persist debounce or a reload right
-    // after logout could otherwise restore the previous account's projects.
+    const { resetCanvasSyncState } = await import("@/services/canvas-project-sync");
+    // Drop the pending persist debounce and sync bookkeeping first, then the
+    // in-memory state and persisted keys: a write that lands after logout must
+    // not restore the previous account's projects or leak sync state.
+    cancelPendingCanvasPersist();
+    resetCanvasSyncState();
     useCanvasStore.setState({ projects: [], deletedProjects: [] });
     useAssetStore.getState().replaceAssets([]);
     const stores = ["image_generation_logs", "video_generation_logs", "image_files", "image_previews", "media_files"];

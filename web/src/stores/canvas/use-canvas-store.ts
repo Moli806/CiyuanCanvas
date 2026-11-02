@@ -69,6 +69,15 @@ const canvasStorage: PersistStorage<CanvasStore> = {
     removeItem: (name) => localForageStorage.removeItem(name),
 };
 
+/** Cancel a pending debounced persist so cleared storage cannot be overwritten by stale state. */
+export function cancelPendingCanvasPersist() {
+    if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+    }
+    queuedPersistState = null;
+}
+
 export const useCanvasStore = create<CanvasStore>()(
     persist(
         (set, get) => ({
