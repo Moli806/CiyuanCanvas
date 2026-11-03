@@ -42,6 +42,11 @@ export type CiyuanModel = {
     video?: CiyuanVideoSpec;
 };
 
+export type CiyuanTextModel = {
+    id: string;
+    icon?: string;
+};
+
 export type CiyuanUser = {
     id: number;
     username: string;
@@ -103,6 +108,42 @@ export function setCiyuanCatalog(models: CiyuanModel[]) {
 
 export function getCiyuanModel(id: string) {
     return catalog.find((model) => model.id === id);
+}
+
+function mergeCiyuanCatalog(models: CiyuanModel[]) {
+    const merged = new Map(catalog.map((item) => [item.id, item]));
+    for (const item of models) {
+        const existing = merged.get(item.id);
+        merged.set(item.id, existing ? { ...existing, icon: item.icon || existing.icon } : item);
+    }
+    catalog = Array.from(merged.values());
+}
+
+const textModelsCache = new Map<string, { promise: Promise<CiyuanTextModel[]>; at: number }>();
+
+export function fetchCiyuanTextModels(group?: string, force = false): Promise<CiyuanTextModel[]> {
+    const key = group || "";
+    const cached = textModelsCache.get(key);
+    if (cached && !force && Date.now() - cached.at < 60_000) return cached.promise;
+    const promise = (async () => {
+        const query = group ? `?group=${encodeURIComponent(group)}` : "";
+        const response = await sessionRequest(`/api/user/models/detail${query}`, { cache: "no-store" });
+        if (response.status === 401 || response.redirected || !response.headers.get("content-type")?.includes("application/json")) {
+            throw new CiyuanUnauthorizedError();
+        }
+        const payload = (await response.json().catch(() => null)) as { success?: boolean; message?: string; data?: Array<{ name?: string; icon?: string }> } | null;
+        if (!response.ok || !payload?.success || !Array.isArray(payload.data)) {
+            throw new Error(readMessage(payload) || "读取文本模型失败");
+        }
+        const models = payload.data.flatMap((item) => (item.name ? [{ id: item.name, icon: item.icon }] : []));
+        mergeCiyuanCatalog(models.map((item) => ({ id: item.id, capability: "text", icon: item.icon })));
+        return models;
+    })().catch((error) => {
+        textModelsCache.delete(key);
+        throw error;
+    });
+    textModelsCache.set(key, { promise, at: Date.now() });
+    return promise;
 }
 
 let sessionAccessToken: { value: string; expiresAt: number } | null = null;
@@ -480,6 +521,7 @@ export async function requestCiyuanChatQuestion(
     const decoder = new TextDecoder();
     let buffer = "";
     let content = "";
+    let sawDelta = false;
     const consume = (block: string) => {
         for (const line of block.split(/\r?\n/)) {
             if (!line.startsWith("data:")) continue;
@@ -492,9 +534,19 @@ export async function requestCiyuanChatQuestion(
                 continue;
             }
             const delta = payload.choices?.[0]?.delta;
-            const text = chatContentText(delta?.content) || chatContentText(payload.choices?.[0]?.message?.content);
-            if (text) {
-                content += text;
+            const deltaText = chatContentText(delta?.content);
+            if (deltaText) {
+                sawDelta = true;
+                content += deltaText;
+                onDelta?.(content);
+                continue;
+            }
+            // Some relays append the complete message after the delta stream.
+            // Ignore that summary so the answer is not duplicated.
+            if (sawDelta) continue;
+            const messageText = chatContentText(payload.choices?.[0]?.message?.content);
+            if (messageText) {
+                content = messageText.startsWith(content) ? messageText : content + messageText;
                 onDelta?.(content);
             }
         }

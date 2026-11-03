@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { ModelPicker } from "@/components/model-picker";
+import { PromptOptimizerDialog } from "@/components/prompt-optimizer-dialog";
 import { VideoSettingsPanel, normalizeVideoResolutionValue, normalizeVideoSizeValue, videoModeLabel, videoSizeLabel } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { clampVideoSeconds } from "@/lib/media-size";
@@ -109,6 +110,7 @@ export default function VideoPage() {
     const [logsOpen, setLogsOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
+    const [promptOptimizerOpen, setPromptOptimizerOpen] = useState(false);
     const [startedAt, setStartedAt] = useState(0);
     const [elapsedMs, setElapsedMs] = useState(0);
     const [now, setNow] = useState(() => Date.now());
@@ -531,7 +533,12 @@ export default function VideoPage() {
                             {spec?.prompt_optional ? null : (
                                 <div>
                                     <div className="mb-2 flex items-center justify-between gap-3">
-                                        <span className="text-base font-semibold">{t("workbench.prompt")}</span>
+                                        <div className="flex min-w-0 items-center gap-2">
+                                            <span className="text-base font-semibold">{t("workbench.prompt")}</span>
+                                            <Button size="small" icon={<Sparkles className="size-3.5" />} onClick={() => setPromptOptimizerOpen(true)}>
+                                                {t("promptOptimizer.open")}
+                                            </Button>
+                                        </div>
                                         <div className="flex gap-2">
                                             <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => setAssetPickerOpen(true)}>
                                                 {t("workbench.viewAssets")}
@@ -702,6 +709,7 @@ export default function VideoPage() {
                 </div>
             </Drawer>
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
+            <PromptOptimizerDialog open={promptOptimizerOpen} kind="video" initialPrompt={prompt} onClose={() => setPromptOptimizerOpen(false)} onApply={setPrompt} />
             <Modal title={t("workbench.deleteLogs")} open={deleteConfirmOpen} onCancel={() => setDeleteConfirmOpen(false)} onOk={deleteSelectedLogs} okText={t("common.delete")} okButtonProps={{ danger: true }} cancelText={t("common.cancel")}>
                 {t("workbench.deleteLogsConfirm", { count: selectedLogIds.length })}
             </Modal>
