@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import { createModelChannel, encodeChannelModel, modelOptionsFromChannels, useConfigStore } from "@/stores/use-config-store";
+import { createModelChannel, encodeChannelModel, modelOptionName, modelOptionsFromChannels, useConfigStore } from "@/stores/use-config-store";
 import {
     CiyuanUnauthorizedError,
     fetchCanvasStorage,
@@ -49,11 +49,20 @@ function seedConfig(data: CiyuanBootstrap) {
         const id = data.defaults[capability] || firstOf(capability);
         return id ? encodeChannelModel("ciyuan", id) : "";
     };
-    const image = pick("image");
-    const video = pick("video");
-    const text = pick("text");
     const current = useConfigStore.getState().config;
     const managedBefore = current.channels.some((channel) => channel.id === "ciyuan");
+    // The gate refreshes the bootstrap every minute; keep the user's current
+    // choice while it is still offered for that capability instead of resetting
+    // it to the default on every refresh.
+    const pickKeeping = (capability: CiyuanCapability, previous: string) => {
+        const name = modelOptionName(previous || "");
+        return name && data.models.some((model) => model.id === name && model.capability === capability) ? encodeChannelModel("ciyuan", name) : pick(capability);
+    };
+    const image = pickKeeping("image", current.imageModel);
+    const video = pickKeeping("video", current.videoModel);
+    const text = pickKeeping("text", current.textModel);
+    const activeName = modelOptionName(current.model || "");
+    const activeModel = current.model && data.models.some((model) => model.id === activeName) ? current.model : image || video || text;
 
     useConfigStore.setState({
         config: {
@@ -64,7 +73,7 @@ function seedConfig(data: CiyuanBootstrap) {
             apiFormat: "ciyuan",
             channels: [channel],
             models,
-            model: image || video || text,
+            model: activeModel,
             imageModel: image,
             videoModel: video,
             textModel: text,

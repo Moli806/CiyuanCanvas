@@ -692,7 +692,6 @@ export default function ImagePage() {
                             <div>
                                 <h2 className="text-xl font-semibold">{t("workbench.results")}</h2>
                             </div>
-                            {running ? <Tag className="m-0 px-2 py-1">{t("workbench.waiting", { time: formatDuration(elapsedMs) })}</Tag> : null}
                         </div>
                         {results.length ? (
                             <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-3">
@@ -702,7 +701,7 @@ export default function ImagePage() {
                                     ) : result.status === "failed" ? (
                                         <FailedImageCard key={result.id} error={result.error || t("workbench.generationFailed")} onRetry={() => retryResult(index)} />
                                     ) : (
-                                        <PendingImageCard key={result.id} />
+                                        <PendingImageCard key={result.id} elapsedMs={elapsedMs} />
                                     ),
                                 )}
                             </div>
@@ -815,7 +814,7 @@ function ResultImageCard({
     );
 }
 
-function PendingImageCard() {
+function PendingImageCard({ elapsedMs }: { elapsedMs: number }) {
     const { t } = useTranslation();
     return (
         <div className="relative aspect-square overflow-hidden rounded-lg border border-dashed border-stone-300 bg-stone-50 dark:border-stone-700 dark:bg-stone-900">
@@ -829,6 +828,7 @@ function PendingImageCard() {
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400">
                 <LoaderCircle className="size-6 animate-spin" />
                 <span>{t("workbench.generating")}</span>
+                <span className="text-xs text-stone-400 dark:text-stone-500">{t("workbench.generatingElapsed", { time: formatDuration(elapsedMs) })}</span>
             </div>
         </div>
     );

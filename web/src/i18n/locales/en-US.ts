@@ -194,6 +194,7 @@ export default {
         waiting: "Waiting {{time}}",
         model: "Model",
         generating: "Generating",
+        generatingElapsed: "Generating for {{time}}",
         success: "Succeeded",
         failed: "Generation failed",
         retry: "Retry",

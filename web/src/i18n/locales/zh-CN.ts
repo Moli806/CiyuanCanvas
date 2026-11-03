@@ -194,6 +194,7 @@ export default {
         waiting: "等待 {{time}}",
         model: "模型",
         generating: "生成中",
+        generatingElapsed: "已持续生成 {{time}}",
         success: "成功",
         failed: "生成失败",
         retry: "重试",
