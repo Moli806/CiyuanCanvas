@@ -42,6 +42,7 @@ export default {
         deleted: "已删除该素材",
         assets: "服务器素材（最近 50 个）",
         expiresIn: "剩 {{count}} 天",
+        pinned: "项目引用",
         download: "下载",
         deleteConfirm: "删除这个素材？引用它的画布会显示占位图。",
         empty: "服务器上还没有素材。",

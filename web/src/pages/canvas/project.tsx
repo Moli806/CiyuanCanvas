@@ -8,7 +8,8 @@ import { useTranslation } from "react-i18next";
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
-import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { getCiyuanModel } from "@/services/ciyuan";
+import { defaultConfig, modelOptionName, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { ensureImagePreview, uploadImage } from "@/services/image-storage";
 import { stageGeneratedImage } from "@/services/generated-image";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
@@ -2777,7 +2778,8 @@ function InfiniteCanvasPage() {
 
             const context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
             const prompt = (savedImageMetadata?.prompt || context?.prompt || "").trim();
-            if (!prompt) {
+            const promptOptional = node.type === CanvasNodeType.Video && Boolean(getCiyuanModel(modelOptionName(generationConfig.model))?.video?.prompt_optional);
+            if (!prompt && !promptOptional) {
                 message.warning(t("canvas.projectPage.retryPromptMissing"));
                 return;
             }

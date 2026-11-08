@@ -132,7 +132,9 @@ export default function VideoPage() {
     const limits = videoReferenceLimits(spec, framesMode);
     const totalReferences = references.length + videoReferences.length + audioReferences.length;
     const omniReferenceMissing = Boolean(spec?.requires_all_refs) && (!references.length || !videoReferences.length || !audioReferences.length);
-    const canGenerate = (Boolean(prompt.trim()) || Boolean(spec?.prompt_optional)) && !omniReferenceMissing;
+    const framesMissing = framesMode && references.length !== 2;
+    const upscaleVideoMissing = Boolean(spec?.prompt_optional) && videoReferences.length !== 1;
+    const canGenerate = (Boolean(prompt.trim()) || Boolean(spec?.prompt_optional)) && !omniReferenceMissing && !framesMissing && !upscaleVideoMissing;
 
     useEffect(() => {
         if (!running || !startedAt) return;
@@ -229,6 +231,10 @@ export default function VideoPage() {
                 return { id: nanoid(), name: file.name, type: stored.mimeType, url: stored.url, storageKey: stored.storageKey, bytes: stored.bytes, width: stored.width, height: stored.height, durationMs: stored.durationMs };
             }),
         );
+        if (spec?.prompt_optional && nextReferences[0]?.durationMs) {
+            const sourceSeconds = Math.min(spec.max_seconds, Math.max(spec.min_seconds, Math.round((nextReferences[0].durationMs / 1000) * 100) / 100));
+            updateConfig("videoSeconds", String(sourceSeconds));
+        }
         setVideoReferences((value) => [...value, ...nextReferences]);
     };
 
@@ -390,7 +396,7 @@ export default function VideoPage() {
             setPrompt(payload.content);
         } else if (payload.kind === "image") {
             const stored = await uploadImage(payload.dataUrl);
-            setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }].slice(0, 7));
+            setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }].slice(0, limits.images));
         }
         setAssetPickerOpen(false);
     };
@@ -1011,7 +1017,7 @@ function buildVideoConfig(config: AiConfig, model: string): AiConfig {
 
 function normalizeVideoSeconds(value: string, spec?: CiyuanVideoSpec) {
     if (String(value).trim() === "-1") return "-1";
-    return clampVideoSeconds(value, spec?.min_seconds, spec?.max_seconds);
+    return clampVideoSeconds(value, spec?.min_seconds, spec?.max_seconds, Boolean(spec?.prompt_optional));
 }
 
 function normalizeVideoSize(value: string) {

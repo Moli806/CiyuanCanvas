@@ -99,8 +99,9 @@ export function readMediaDimensions(size: string, scale: string, ratio: string) 
     return parsePixelSize(computed) || { width: 0, height: 0 };
 }
 
-export function clampVideoSeconds(value: string, minSeconds = VIDEO_SECONDS_MIN, maxSeconds = VIDEO_SECONDS_MAX) {
-    const seconds = Math.floor(Number(value) || 6);
+export function clampVideoSeconds(value: string, minSeconds = VIDEO_SECONDS_MIN, maxSeconds = VIDEO_SECONDS_MAX, allowDecimal = false) {
+    const num = Number(value) || 6;
+    const seconds = allowDecimal ? Math.round(num * 100) / 100 : Math.floor(num);
     return String(Math.max(minSeconds, Math.min(maxSeconds, seconds)));
 }
 

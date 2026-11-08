@@ -136,7 +136,7 @@ export function CanvasStorageDialog({ open, onClose }: { open: boolean; onClose:
                                                 <span className="w-10 shrink-0 text-stone-500">{asset.kind}</span>
                                                 <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-stone-600 dark:text-stone-400">{asset.name}</span>
                                                 <span className="w-16 shrink-0 text-right text-stone-500">{formatBytes(asset.bytes)}</span>
-                                                <span className={`w-16 shrink-0 text-right ${daysLeft <= 1 ? "text-red-500" : "text-stone-500"}`}>{t("canvasStorage.expiresIn", { count: Math.max(0, daysLeft) })}</span>
+                                                <span className={`w-16 shrink-0 text-right ${!asset.pinned && daysLeft <= 1 ? "text-red-500" : "text-stone-500"}`}>{asset.pinned ? t("canvasStorage.pinned") : t("canvasStorage.expiresIn", { count: Math.max(0, daysLeft) })}</span>
                                                 <button type="button" className="shrink-0 text-stone-500 transition hover:text-stone-900 dark:hover:text-stone-100" title={t("canvasStorage.download")} onClick={() => window.open(asset.url, "_blank", "noopener,noreferrer")}>
                                                     <Download className="size-3.5" />
                                                 </button>

@@ -43,7 +43,8 @@ export function VideoSettingsPanel({ config, model: modelOverride, onConfigChang
     const modeItems = spec && !spec.frames ? videoModeOptions.filter((item) => item.value === "reference") : videoModeOptions;
     const minSeconds = spec?.min_seconds ?? VIDEO_SECONDS_MIN;
     const maxSeconds = spec?.max_seconds ?? VIDEO_SECONDS_MAX;
-    const seconds = Number(clampVideoSeconds(config.videoSeconds || "6", minSeconds, maxSeconds));
+    const allowDecimalSeconds = Boolean(spec?.prompt_optional);
+    const seconds = Number(clampVideoSeconds(config.videoSeconds || "6", minSeconds, maxSeconds, allowDecimalSeconds));
     const videoMode = normalizeVideoModeValue(config.videoMode);
     const resolution = parseVideoResolution(config.vquality);
     const selectedRatio = inferVideoRatio(config.size || "auto");
@@ -59,9 +60,9 @@ export function VideoSettingsPanel({ config, model: modelOverride, onConfigChang
 
     useEffect(() => {
         if (!spec) return;
-        const rawSeconds = Number(clampVideoSeconds(config.videoSeconds || "6", spec.min_seconds, spec.max_seconds));
+        const rawSeconds = Number(clampVideoSeconds(config.videoSeconds || "6", spec.min_seconds, spec.max_seconds, Boolean(spec.prompt_optional)));
         const nextSeconds = Math.min(spec.max_seconds, Math.max(spec.min_seconds, rawSeconds));
-        if (nextSeconds !== rawSeconds) onConfigChange("videoSeconds", String(nextSeconds));
+        if (String(nextSeconds) !== String(config.videoSeconds || "6")) onConfigChange("videoSeconds", String(nextSeconds));
         if (spec.resolutions.length && !spec.resolutions.some((value) => value.replace(/p$/i, "") === resolution)) {
             onConfigChange("vquality", spec.default_resolution.replace(/p$/i, ""));
         }
@@ -141,8 +142,8 @@ export function VideoSettingsPanel({ config, model: modelOverride, onConfigChang
                 )}
                 <SettingGroup title={t("settingsPanels.video.seconds")} color={theme.node.muted}>
                     <div className="flex items-center gap-3" onMouseDown={(event) => event.stopPropagation()}>
-                        <Slider className="min-w-0 flex-1" min={minSeconds} max={maxSeconds} step={1} value={seconds} onChange={(value) => onConfigChange("videoSeconds", String(Array.isArray(value) ? value[0] : value))} />
-                        <SecondsInput value={seconds} min={minSeconds} max={maxSeconds} theme={theme} onCommit={(value) => onConfigChange("videoSeconds", String(value))} />
+                        <Slider className="min-w-0 flex-1" min={minSeconds} max={maxSeconds} step={allowDecimalSeconds ? 0.01 : 1} value={seconds} onChange={(value) => onConfigChange("videoSeconds", String(Array.isArray(value) ? value[0] : value))} />
+                        <SecondsInput value={seconds} min={minSeconds} max={maxSeconds} allowDecimal={allowDecimalSeconds} theme={theme} onCommit={(value) => onConfigChange("videoSeconds", String(value))} />
                         <span className="shrink-0 text-sm" style={{ color: theme.node.muted }}>s</span>
                     </div>
                 </SettingGroup>
@@ -171,7 +172,8 @@ export function videoSizeLabel(value: string) {
 
 export function videoSecondsLabel(value: string) {
     if (String(value).trim() === "-1") return i18n.t("settingsPanels.video.smart");
-    return `${value || "6"}s`;
+    const num = Number(value);
+    return `${Number.isInteger(num) ? num : value || "6"}s`;
 }
 
 export function videoModeLabel(value: string) {
@@ -228,9 +230,11 @@ function ResolutionInput({ value, theme, onChange }: { value: string; theme: Can
     );
 }
 
-function SecondsInput({ value, min, max, theme, onCommit }: { value: number; min: number; max: number; theme: CanvasTheme; onCommit: (value: number) => void }) {
+function SecondsInput({ value, min, max, allowDecimal = false, theme, onCommit }: { value: number; min: number; max: number; allowDecimal?: boolean; theme: CanvasTheme; onCommit: (value: number) => void }) {
     const commit = (input: HTMLInputElement) => {
-        const next = Math.min(max, Math.max(min, Math.floor(Number(input.value) || min)));
+        const raw = Number(input.value) || min;
+        const rounded = allowDecimal ? Math.round(raw * 100) / 100 : Math.floor(raw);
+        const next = Math.min(max, Math.max(min, rounded));
         input.value = String(next);
         onCommit(next);
     };
@@ -241,6 +245,7 @@ function SecondsInput({ value, min, max, theme, onCommit }: { value: number; min
                 type="number"
                 min={min}
                 max={max}
+                step={allowDecimal ? "0.01" : "1"}
                 className="min-w-0 flex-1 bg-transparent px-2 text-center outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 defaultValue={value}
                 key={value}

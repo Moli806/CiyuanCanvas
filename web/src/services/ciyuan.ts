@@ -72,6 +72,7 @@ export type CiyuanCanvasAsset = {
     created_at: number;
     last_used_at: number;
     expires_at: number;
+    pinned?: boolean;
     url: string;
 };
 
@@ -305,14 +306,18 @@ export async function createCiyuanVideoTask(
     if (!spec.frames && config.videoMode === "frames" && references.length > 1) {
         throw new Error(`${model} 不支持首尾帧模式，请切换到全能参考模式`);
     }
-    if (spec.frames && config.videoMode === "frames" && references.length > 2) {
-        throw new Error("首尾帧模式最多支持 2 张参考图");
+    if (spec.frames && config.videoMode === "frames" && references.length !== 2) {
+        throw new Error("首尾帧模式需要上传 2 张参考图（首帧和尾帧）");
     }
     if (spec.frames && config.videoMode === "frames" && (videos.length || audios.length)) {
         throw new Error("首尾帧模式不支持参考视频或参考音乐");
     }
 
-    const duration = Math.trunc(Number(config.videoSeconds) || 6);
+    const sourceVideoSeconds = spec.prompt_optional && videos[0]?.durationMs
+        ? Math.round((videos[0].durationMs / 1000) * 100) / 100
+        : 0;
+    const rawDuration = sourceVideoSeconds > 0 ? sourceVideoSeconds : Number(config.videoSeconds) || 6;
+    const duration = spec.prompt_optional ? Math.round(rawDuration * 100) / 100 : Math.trunc(rawDuration);
     if (duration < spec.min_seconds || duration > spec.max_seconds) {
         throw new Error(`${model} 时长需为 ${spec.min_seconds}-${spec.max_seconds} 秒`);
     }
@@ -323,9 +328,9 @@ export async function createCiyuanVideoTask(
     const videoUrls = videos.length ? await Promise.all(videos.map((item) => uploadReferenceMedia(item, "ref.mp4", options?.signal))) : [];
     const audioUrls = audios.length ? await Promise.all(audios.map((item) => uploadReferenceMedia(item, "ref.mp3", options?.signal))) : [];
     const params: Record<string, unknown> = { duration, resolution };
-    if (spec.frames && config.videoMode === "frames" && imageUrls.length) {
+    if (spec.frames && config.videoMode === "frames" && imageUrls.length === 2) {
         params.first_frame_url = imageUrls[0];
-        if (imageUrls[1]) params.last_frame_url = imageUrls[1];
+        params.last_frame_url = imageUrls[1];
     } else if (imageUrls.length) {
         params.images = imageUrls;
     }

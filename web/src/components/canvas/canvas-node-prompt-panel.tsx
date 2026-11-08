@@ -4,7 +4,8 @@ import { Button, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { ModelPicker } from "@/components/model-picker";
-import { defaultConfig, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { getCiyuanModel } from "@/services/ciyuan";
+import { defaultConfig, modelOptionName, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
@@ -62,7 +63,8 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
 
     const submit = () => {
         const text = prompt.trim();
-        if (!text || isRunning) return;
+        const promptOptional = mode === "video" && Boolean(getCiyuanModel(modelOptionName(config.model))?.video?.prompt_optional);
+        if ((!text && !promptOptional) || isRunning) return;
         onGenerate(node.id, mode, text);
     };
 
@@ -129,7 +131,7 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
                     type="primary"
                     className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
                     danger={isRunning}
-                    disabled={!isRunning && !prompt.trim()}
+                    disabled={!isRunning && !prompt.trim() && !(mode === "video" && getCiyuanModel(modelOptionName(config.model))?.video?.prompt_optional)}
                     onClick={() => (isRunning ? onStop(node.id) : submit())}
                     aria-label={t(isRunning ? "canvas.promptPanel.stopGeneration" : "canvas.promptPanel.generate")}
                 >

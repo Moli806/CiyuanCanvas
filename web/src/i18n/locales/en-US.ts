@@ -42,6 +42,7 @@ export default {
         deleted: "Asset deleted",
         assets: "Server assets (latest 50)",
         expiresIn: "{{count}}d left",
+        pinned: "Pinned",
         download: "Download",
         deleteConfirm: "Delete this asset? Canvases that reference it will show a placeholder.",
         empty: "No assets on the server yet.",
