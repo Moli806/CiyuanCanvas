@@ -318,8 +318,9 @@ export async function createCiyuanVideoTask(
         : 0;
     const rawDuration = sourceVideoSeconds > 0 ? sourceVideoSeconds : Number(config.videoSeconds) || 6;
     const duration = spec.prompt_optional ? Math.round(rawDuration * 100) / 100 : Math.trunc(rawDuration);
-    if (duration < spec.min_seconds || duration > spec.max_seconds) {
-        throw new Error(`${model} 时长需为 ${spec.min_seconds}-${spec.max_seconds} 秒`);
+    const maxSeconds = /^omini-/i.test(model) && spec.frames && config.videoMode === "frames" ? Math.min(10, spec.max_seconds) : spec.max_seconds;
+    if (duration < spec.min_seconds || duration > maxSeconds) {
+        throw new Error(`${model} 时长需为 ${spec.min_seconds}-${maxSeconds} 秒`);
     }
     const requested = normalizeVideoResolution(config.vquality);
     const resolution = spec.resolutions.includes(requested) ? requested : spec.default_resolution;

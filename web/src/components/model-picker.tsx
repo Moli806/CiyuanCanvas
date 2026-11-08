@@ -111,7 +111,7 @@ function ModelIcon({ model }: { model: string }) {
 // variant, the resolution and finally the remaining suffix decide, so Seedance
 // 2.0 listings never interleave with 2.5 and "-one" variants stay next to their
 // base model.
-const MODEL_FAMILY_ORDER = ["gpt-image", "banana", "Wan-", "Kling-", "Seedance-", "MiniMax-", "视频超分", "gpt-", "claude-", "gemini-", "Deepseek-", "Suno-"];
+const MODEL_FAMILY_ORDER = ["gpt-image", "banana", "Wan-", "Kling-", "Seedance-", "MiniMax-", "Omini-", "视频超分", "gpt-", "claude-", "gemini-", "Deepseek-", "Suno-"];
 
 function modelSortValue(name: string) {
     const lower = name.toLowerCase();

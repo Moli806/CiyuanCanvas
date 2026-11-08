@@ -42,10 +42,11 @@ export function VideoSettingsPanel({ config, model: modelOverride, onConfigChang
     const ratioItems = spec ? (spec.aspect_ratios?.length ? videoRatioOptions.filter((item) => spec.aspect_ratios!.includes(item.value)) : []) : videoRatioOptions;
     const modeItems = spec && !spec.frames ? videoModeOptions.filter((item) => item.value === "reference") : videoModeOptions;
     const minSeconds = spec?.min_seconds ?? VIDEO_SECONDS_MIN;
-    const maxSeconds = spec?.max_seconds ?? VIDEO_SECONDS_MAX;
+    const videoMode = normalizeVideoModeValue(config.videoMode);
+    const isOminiFrames = /^omini-/i.test(modelName) && Boolean(spec?.frames) && videoMode === "frames";
+    const maxSeconds = isOminiFrames ? Math.min(10, spec?.max_seconds ?? VIDEO_SECONDS_MAX) : (spec?.max_seconds ?? VIDEO_SECONDS_MAX);
     const allowDecimalSeconds = Boolean(spec?.prompt_optional);
     const seconds = Number(clampVideoSeconds(config.videoSeconds || "6", minSeconds, maxSeconds, allowDecimalSeconds));
-    const videoMode = normalizeVideoModeValue(config.videoMode);
     const resolution = parseVideoResolution(config.vquality);
     const selectedRatio = inferVideoRatio(config.size || "auto");
     const dimensions = readVideoDimensions(config.size || "auto", resolution, selectedRatio);
@@ -60,8 +61,9 @@ export function VideoSettingsPanel({ config, model: modelOverride, onConfigChang
 
     useEffect(() => {
         if (!spec) return;
-        const rawSeconds = Number(clampVideoSeconds(config.videoSeconds || "6", spec.min_seconds, spec.max_seconds, Boolean(spec.prompt_optional)));
-        const nextSeconds = Math.min(spec.max_seconds, Math.max(spec.min_seconds, rawSeconds));
+        const effectiveMax = isOminiFrames ? Math.min(10, spec.max_seconds) : spec.max_seconds;
+        const rawSeconds = Number(clampVideoSeconds(config.videoSeconds || "6", spec.min_seconds, effectiveMax, Boolean(spec.prompt_optional)));
+        const nextSeconds = Math.min(effectiveMax, Math.max(spec.min_seconds, rawSeconds));
         if (String(nextSeconds) !== String(config.videoSeconds || "6")) onConfigChange("videoSeconds", String(nextSeconds));
         if (spec.resolutions.length && !spec.resolutions.some((value) => value.replace(/p$/i, "") === resolution)) {
             onConfigChange("vquality", spec.default_resolution.replace(/p$/i, ""));
@@ -70,7 +72,7 @@ export function VideoSettingsPanel({ config, model: modelOverride, onConfigChang
         if (spec.aspect_ratios?.length && selectedRatio !== "auto" && !spec.aspect_ratios.includes(selectedRatio)) {
             onConfigChange("size", spec.aspect_ratios.find((value) => value !== "auto") || "auto");
         }
-    }, [spec, config.videoSeconds, config.vquality, config.size, config.videoMode, onConfigChange, resolution, selectedRatio, videoMode]);
+    }, [spec, isOminiFrames, config.videoSeconds, config.vquality, config.size, config.videoMode, onConfigChange, resolution, selectedRatio, videoMode]);
 
     return (
         <ImageSettingsTheme theme={theme}>
