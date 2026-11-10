@@ -1,5 +1,6 @@
 import localforage from "localforage";
 import { nanoid } from "nanoid";
+import { localForageStorage } from "@/lib/localforage-storage";
 
 import { fetchCanvasImageResult, uploadCanvasAsset } from "@/services/ciyuan";
 import { uploadImage } from "@/services/image-storage";
@@ -14,6 +15,7 @@ const ATTEMPT_STORE_KEY = "canvas-image-attempts";
 const attemptStore = localforage.createInstance({ name: "infinite-canvas", storeName: ATTEMPT_STORE_KEY });
 const ATTEMPT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const ATTEMPT_DROP_AFTER_MS = 10 * 60 * 1000;
+let recoveryVersion = 0;
 
 export type ImageAttempt = { id: string; createdAt: number; owner: "workbench" | "auto" };
 
@@ -42,12 +44,14 @@ export async function resolveAttemptAssets(requestId: string, count: number): Pr
 
 /** Collect results of attempts whose page died mid-request; returns how many images were recovered. */
 export async function resumeImageAttempts(): Promise<number> {
+    const version = recoveryVersion;
     const attempts: ImageAttempt[] = [];
     await attemptStore.iterate<ImageAttempt, void>((value) => {
         if (value?.id) attempts.push(value);
     });
     let recovered = 0;
     for (const attempt of attempts) {
+        if (version !== recoveryVersion) return 0;
         if (attempt.owner === "workbench") continue;
         const age = Date.now() - attempt.createdAt;
         if (age > ATTEMPT_MAX_AGE_MS) {
@@ -55,6 +59,7 @@ export async function resumeImageAttempts(): Promise<number> {
             continue;
         }
         const result = await fetchCanvasImageResult(attempt.id).catch(() => null);
+        if (version !== recoveryVersion) return 0;
         if (!result) {
             if (age > ATTEMPT_DROP_AFTER_MS) await finishImageAttempt(attempt.id);
             continue;
@@ -64,6 +69,7 @@ export async function resumeImageAttempts(): Promise<number> {
             const url = new URL(asset.url, window.location.origin).toString();
             try {
                 const image = await uploadImage(url);
+                if (version !== recoveryVersion) return 0;
                 useAssetStore.getState().addAsset({
                     kind: "image",
                     title: `恢复的生成结果 ${asset.name.slice(0, 6)}`,
@@ -95,9 +101,13 @@ export async function mirrorGeneratedMedia(blob: Blob, name: string): Promise<st
 
 /** Logout must not leak one account's canvas data to the next login. */
 export async function clearCanvasLocalData(): Promise<void> {
+    recoveryVersion += 1;
     const { useCanvasStore, cancelPendingCanvasPersist } = await import("@/stores/canvas/use-canvas-store");
     const { useAssetStore } = await import("@/stores/use-asset-store");
     const { resetCanvasSyncState } = await import("@/services/canvas-project-sync");
+    // Finish hydration before clearing; an older IndexedDB read must not
+    // repopulate the store after logout.
+    await Promise.all([useCanvasStore.persist.hasHydrated() ? undefined : useCanvasStore.persist.rehydrate(), useAssetStore.persist.hasHydrated() ? undefined : useAssetStore.persist.rehydrate()]);
     // Drop the pending persist debounce and sync bookkeeping first, then the
     // in-memory state and persisted keys: a write that lands after logout must
     // not restore the previous account's projects or leak sync state.
@@ -105,13 +115,13 @@ export async function clearCanvasLocalData(): Promise<void> {
     resetCanvasSyncState();
     useCanvasStore.setState({ projects: [], deletedProjects: [] });
     useAssetStore.getState().replaceAssets([]);
+    cancelPendingCanvasPersist();
+    const canvasKey = useCanvasStore.persist.getOptions().name!;
+    const assetKey = useAssetStore.persist.getOptions().name!;
+    localStorage.removeItem(canvasKey);
+    localStorage.removeItem(assetKey);
     const stores = ["image_generation_logs", "video_generation_logs", "image_files", "image_previews", "media_files"];
-    await Promise.all([
-        attemptStore.clear().catch(() => undefined),
-        Promise.resolve(useCanvasStore.persist.clearStorage()).catch(() => undefined),
-        Promise.resolve(useAssetStore.persist.clearStorage()).catch(() => undefined),
-        ...stores.map((storeName) => localforage.createInstance({ name: "infinite-canvas", storeName }).clear().catch(() => undefined)),
-    ]);
+    await Promise.all([attemptStore.clear(), localForageStorage.removeItem(canvasKey), localForageStorage.removeItem(assetKey), ...stores.map((storeName) => localforage.createInstance({ name: "infinite-canvas", storeName }).clear())]);
 }
 
 function delay(ms: number) {

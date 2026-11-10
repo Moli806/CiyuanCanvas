@@ -4,6 +4,7 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { localForageStorage } from "@/lib/localforage-storage";
+import { scheduleCanvasSync } from "@/services/canvas-project-sync";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, ViewportTransform } from "@/types/canvas";
 
@@ -61,9 +62,10 @@ const canvasStorage: PersistStorage<CanvasStore> = {
         saveTimer = setTimeout(() => {
             saveTimer = null;
             void localForageStorage.setItem(name, JSON.stringify(value));
-            void import("@/services/canvas-project-sync").then(({ scheduleCanvasSync }) => {
-                scheduleCanvasSync(nextState.projects, nextState.deletedProjects.map((item) => item.id));
-            });
+            scheduleCanvasSync(
+                nextState.projects,
+                nextState.deletedProjects.map((item) => item.id),
+            );
         }, 400);
     },
     removeItem: (name) => localForageStorage.removeItem(name),

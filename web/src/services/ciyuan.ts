@@ -149,8 +149,20 @@ export function fetchCiyuanTextModels(group?: string, force = false): Promise<Ci
 
 let sessionAccessToken: { value: string; expiresAt: number } | null = null;
 let inflightRefresh: Promise<string> | null = null;
+let sessionVersion = 0;
+let sessionUserId: number | null = null;
+
+export function resetCiyuanSession() {
+    sessionVersion += 1;
+    sessionUserId = null;
+    sessionAccessToken = null;
+    inflightRefresh = null;
+    catalog = [];
+    textModelsCache.clear();
+}
 
 async function refreshSessionAccessToken(): Promise<string> {
+    const version = sessionVersion;
     const response = await fetch("/api/user/auth/refresh", {
         method: "POST",
         credentials: "include",
@@ -159,8 +171,9 @@ async function refreshSessionAccessToken(): Promise<string> {
     });
     const payload = (await response.json().catch(() => null)) as {
         success?: boolean;
-        data?: { access_token?: string; access_expires_at?: number };
+        data?: { access_token?: string; access_expires_at?: number; user?: { id: number } };
     } | null;
+    if (version !== sessionVersion) throw new DOMException("Session changed", "AbortError");
     if (response.status === 401 || response.status === 403) {
         sessionAccessToken = null;
         throw new CiyuanUnauthorizedError();
@@ -173,6 +186,14 @@ async function refreshSessionAccessToken(): Promise<string> {
         sessionAccessToken = null;
         throw new Error(readMessage(payload) || "刷新登录状态失败");
     }
+    const userId = payload.data.user?.id;
+    if (userId !== undefined) {
+        if (sessionUserId !== null && sessionUserId !== userId) {
+            sessionAccessToken = null;
+            throw new CiyuanUnauthorizedError();
+        }
+        sessionUserId = userId;
+    }
     sessionAccessToken = {
         value: payload.data.access_token,
         expiresAt: payload.data.access_expires_at ?? 0,
@@ -182,8 +203,9 @@ async function refreshSessionAccessToken(): Promise<string> {
 
 function refreshSessionOnce(): Promise<string> {
     if (!inflightRefresh) {
+        const version = sessionVersion;
         inflightRefresh = refreshSessionAccessToken().finally(() => {
-            inflightRefresh = null;
+            if (version === sessionVersion) inflightRefresh = null;
         });
     }
     return inflightRefresh;
@@ -198,15 +220,21 @@ async function getSessionAccessToken(force = false): Promise<string> {
 }
 
 async function sessionRequest(path: string, init: RequestInit = {}): Promise<Response> {
+    const version = sessionVersion;
     const token = await getSessionAccessToken();
+    if (version !== sessionVersion) throw new DOMException("Session changed", "AbortError");
+    init.signal?.throwIfAborted();
     const headers = new Headers(init.headers);
     headers.set("Authorization", `Bearer ${token}`);
     const response = await fetch(path, { ...init, headers, credentials: "include" });
+    if (version !== sessionVersion) throw new DOMException("Session changed", "AbortError");
     if (response.status !== 401) return response;
 
     sessionAccessToken = null;
     const retryHeaders = new Headers(init.headers);
     retryHeaders.set("Authorization", `Bearer ${await getSessionAccessToken(true)}`);
+    if (version !== sessionVersion) throw new DOMException("Session changed", "AbortError");
+    init.signal?.throwIfAborted();
     return fetch(path, { ...init, headers: retryHeaders, credentials: "include" });
 }
 
@@ -226,14 +254,19 @@ function isSameOriginRequest(config: AxiosRequestConfig): boolean {
 export async function ciyuanAxios<T = unknown>(config: AxiosRequestConfig): Promise<AxiosResponse<T>> {
     // 渠道 baseUrl 可被改成外部域；会话令牌只随同源请求发送，避免外泄到第三方主机。
     const sameOrigin = isSameOriginRequest(config);
+    const version = sessionVersion;
     const run = async () => {
         const headers = new AxiosHeaders(config.headers as Record<string, string> | undefined);
         if (sameOrigin) headers.set("Authorization", `Bearer ${await getSessionAccessToken()}`);
-        return axios.request<T>({ ...config, headers });
+        if (sameOrigin && version !== sessionVersion) throw new DOMException("Session changed", "AbortError");
+        const response = await axios.request<T>({ ...config, headers });
+        if (sameOrigin && version !== sessionVersion) throw new DOMException("Session changed", "AbortError");
+        return response;
     };
     try {
         return await run();
     } catch (error) {
+        if (sameOrigin && version !== sessionVersion) throw new DOMException("Session changed", "AbortError");
         if (sameOrigin && axios.isAxiosError(error) && error.response?.status === 401) {
             sessionAccessToken = null;
             return run();
@@ -255,8 +288,7 @@ export async function fetchCiyuanBootstrap(): Promise<CiyuanBootstrap> {
 }
 
 export async function logoutCiyuan() {
-    sessionAccessToken = null;
-    inflightRefresh = null;
+    resetCiyuanSession();
     await fetch("/api/user/auth/logout", { method: "POST", credentials: "include" }).catch(() => undefined);
 }
 
@@ -275,10 +307,7 @@ export async function uploadCanvasAsset(source: string | Blob, name = "ref.png",
     return new URL(payload.data.path, window.location.origin).toString();
 }
 
-export type CiyuanVideoTaskResult =
-    | { status: "pending" }
-    | { status: "completed"; result: { blob: Blob } }
-    | { status: "failed"; error: string };
+export type CiyuanVideoTaskResult = { status: "pending" } | { status: "completed"; result: { blob: Blob } } | { status: "failed"; error: string };
 
 export async function createCiyuanVideoTask(
     config: AiConfig,
@@ -313,9 +342,7 @@ export async function createCiyuanVideoTask(
         throw new Error("首尾帧模式不支持参考视频或参考音乐");
     }
 
-    const sourceVideoSeconds = spec.prompt_optional && videos[0]?.durationMs
-        ? Math.round((videos[0].durationMs / 1000) * 100) / 100
-        : 0;
+    const sourceVideoSeconds = spec.prompt_optional && videos[0]?.durationMs ? Math.round((videos[0].durationMs / 1000) * 100) / 100 : 0;
     const rawDuration = sourceVideoSeconds > 0 ? sourceVideoSeconds : Number(config.videoSeconds) || 6;
     const duration = spec.prompt_optional ? Math.round(rawDuration * 100) / 100 : Math.trunc(rawDuration);
     const maxSeconds = /^omini-/i.test(model) && spec.frames && config.videoMode === "frames" ? Math.min(10, spec.max_seconds) : spec.max_seconds;
@@ -417,7 +444,9 @@ async function waitCiyuanTask(config: AiConfig, taskId: string, signal?: AbortSi
 }
 
 function normalizeVideoResolution(value: string) {
-    const raw = String(value || "").trim().toLowerCase();
+    const raw = String(value || "")
+        .trim()
+        .toLowerCase();
     if (raw === "low") return "480p";
     if (raw === "auto" || raw === "high" || raw === "medium") return "720p";
     const number = raw.replace(/p$/i, "");
@@ -480,24 +509,14 @@ async function ciyuanGetBlob(config: AiConfig, path: string, signal?: AbortSigna
 
 export type CiyuanChatMessage = {
     role: string;
-    content:
-        | string
-        | Array<
-              | { type: "text"; text: string }
-              | { type: "image_url"; image_url: { url: string } }
-          >;
+    content: string | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
     tool_call_id?: string;
 };
 
 // The playground endpoint authenticates with the dashboard session and accepts
 // image input for every vision-capable relay model. The canvas uses it for the
 // reverse-prompt composer instead of the OpenAI-only Responses shape.
-export async function requestCiyuanChatQuestion(
-    config: AiConfig,
-    messages: CiyuanChatMessage[],
-    onDelta?: (text: string) => void,
-    signal?: AbortSignal,
-): Promise<string> {
+export async function requestCiyuanChatQuestion(config: AiConfig, messages: CiyuanChatMessage[], onDelta?: (text: string) => void, signal?: AbortSignal): Promise<string> {
     const base = config.baseUrl.trim().replace(/\/+$/, "").replace(/\/v1$/i, "");
     const response = await ciyuanSessionFetch(`${base}/pg/chat/completions`, {
         method: "POST",
@@ -709,22 +728,23 @@ export async function fetchCanvasImageResult(requestId: string): Promise<{ statu
     return { status: payload.data.status || "", error: payload.data.error, assets: payload.data.assets || [] };
 }
 
-export function getServerCanvasProject(id: string) {
-    return canvasJson<CiyuanServerProject & { data?: unknown }>(`/api/canvas/projects/${encodeURIComponent(id)}`, { cache: "no-store" });
+export function getServerCanvasProject(id: string, signal?: AbortSignal) {
+    return canvasJson<CiyuanServerProject & { data?: unknown }>(`/api/canvas/projects/${encodeURIComponent(id)}`, { cache: "no-store", signal });
 }
 
-export function fetchServerCanvasProjects() {
-    return canvasJson<{ projects: CiyuanServerProject[] }>("/api/canvas/projects", { cache: "no-store" });
+export function fetchServerCanvasProjects(signal?: AbortSignal) {
+    return canvasJson<{ projects: CiyuanServerProject[] }>("/api/canvas/projects", { cache: "no-store", signal });
 }
 
-export function saveServerCanvasProject(id: string, project: unknown) {
+export function saveServerCanvasProject(id: string, project: unknown, signal?: AbortSignal) {
     return canvasJson<{ id: string; bytes: number; saved_at: number }>(`/api/canvas/projects/${encodeURIComponent(id)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(project),
+        signal,
     });
 }
 
-export function deleteServerCanvasProject(id: string) {
-    return canvasJson<unknown>(`/api/canvas/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+export function deleteServerCanvasProject(id: string, signal?: AbortSignal) {
+    return canvasJson<unknown>(`/api/canvas/projects/${encodeURIComponent(id)}`, { method: "DELETE", signal });
 }

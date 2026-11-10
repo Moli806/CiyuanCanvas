@@ -6,6 +6,7 @@ import {
     fetchCanvasStorage,
     fetchCiyuanBootstrap,
     logoutCiyuan,
+    resetCiyuanSession,
     setCiyuanCatalog,
     type CiyuanBootstrap,
     type CiyuanCanvasStorage,
@@ -13,6 +14,8 @@ import {
     type CiyuanModel,
     type CiyuanUser,
 } from "@/services/ciyuan";
+
+import { resetCanvasSyncState } from "@/services/canvas-project-sync";
 
 type SessionStatus = "idle" | "loading" | "ready" | "unauthenticated" | "error";
 
@@ -33,6 +36,8 @@ type CiyuanState = {
 };
 
 let refreshPromise: Promise<void> | null = null;
+let sessionVersion = 0;
+const canvasOwnerKey = "ciyuan-canvas-owner";
 
 function seedConfig(data: CiyuanBootstrap) {
     const channel = createModelChannel({
@@ -116,10 +121,22 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
 
     refresh: (silent = false) => {
         if (refreshPromise) return refreshPromise;
+        const version = sessionVersion;
         if (!silent) set({ status: "loading", error: "" });
         const promise = (async () => {
             try {
                 const data = await fetchCiyuanBootstrap();
+                if (version !== sessionVersion) return;
+                const owner = String(data.user.id);
+                if (localStorage.getItem(canvasOwnerKey) !== owner || (get().user && get().user?.id !== data.user.id)) {
+                    set({ status: "loading", user: null, storage: null, recoveredImages: 0 });
+                    resetCanvasSyncState();
+                    resetCiyuanSession();
+                    const { clearCanvasLocalData } = await import("@/services/image-attempts");
+                    await clearCanvasLocalData();
+                    if (version !== sessionVersion) return;
+                    localStorage.setItem(canvasOwnerKey, owner);
+                }
                 setCiyuanCatalog(data.models);
                 seedConfig(data);
                 set({
@@ -132,7 +149,10 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
                     imageReplayTimeoutSeconds: data.image_replay_timeout_seconds && data.image_replay_timeout_seconds > 0 ? data.image_replay_timeout_seconds : 1800,
                 });
             } catch (error) {
+                if (version !== sessionVersion) return;
                 if (error instanceof CiyuanUnauthorizedError) {
+                    resetCanvasSyncState();
+                    resetCiyuanSession();
                     clearConfigToken();
                     set({ status: "unauthenticated", user: null, models: [], error: "" });
                     return;
@@ -140,7 +160,7 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
                 if (silent && get().status === "ready") return;
                 set({ status: "error", error: error instanceof Error ? error.message : "连接词元API失败" });
             } finally {
-                refreshPromise = null;
+                if (version === sessionVersion) refreshPromise = null;
             }
         })();
         refreshPromise = promise;
@@ -148,8 +168,10 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
     },
 
     refreshStorage: async () => {
+        const version = sessionVersion;
+        const userId = get().user?.id;
         const { storage } = await fetchCanvasStorage();
-        set({ storage });
+        if (version === sessionVersion && userId === get().user?.id) set({ storage });
     },
 
     setStorage: (storage) => set({ storage }),
@@ -157,10 +179,19 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
     setRecoveredImages: (count) => set({ recoveredImages: count }),
 
     logout: async () => {
-        await logoutCiyuan();
-        const { clearCanvasLocalData } = await import("@/services/image-attempts");
-        await clearCanvasLocalData().catch(() => undefined);
-        clearConfigToken();
-        set({ status: "unauthenticated", user: null, models: [], error: "", storage: null, imageReplayTimeoutSeconds: 1800, recoveredImages: 0 });
+        sessionVersion += 1;
+        refreshPromise = null;
+        resetCanvasSyncState();
+        set({ status: "loading", user: null, models: [], storage: null });
+        const logout = logoutCiyuan();
+        try {
+            const { clearCanvasLocalData } = await import("@/services/image-attempts");
+            await clearCanvasLocalData();
+            localStorage.removeItem(canvasOwnerKey);
+        } finally {
+            await logout;
+            clearConfigToken();
+            set({ status: "unauthenticated", user: null, models: [], error: "", storage: null, imageReplayTimeoutSeconds: 1800, recoveredImages: 0 });
+        }
     },
 }));

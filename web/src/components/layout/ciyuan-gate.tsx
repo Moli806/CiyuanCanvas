@@ -11,6 +11,7 @@ export function CiyuanGate({ children }: { children: ReactNode }) {
     const { t } = useTranslation();
     const status = useCiyuanStore((state) => state.status);
     const error = useCiyuanStore((state) => state.error);
+    const userId = useCiyuanStore((state) => state.user?.id);
     const refresh = useCiyuanStore((state) => state.refresh);
 
     useEffect(() => {
@@ -27,13 +28,14 @@ export function CiyuanGate({ children }: { children: ReactNode }) {
         let cancelled = false;
         void (async () => {
             await pullAndMergeCanvasProjects().catch(() => undefined);
+            if (cancelled) return;
             const recovered = await resumeImageAttempts().catch(() => 0);
             if (!cancelled && recovered > 0) useCiyuanStore.getState().setRecoveredImages(recovered);
         })();
         return () => {
             cancelled = true;
         };
-    }, [status]);
+    }, [status, userId]);
 
     useEffect(() => {
         if (status !== "unauthenticated") return;
