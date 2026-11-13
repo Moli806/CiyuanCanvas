@@ -7,7 +7,7 @@
 - 用户只能使用词元API 后台返回的画布模型清单，不能添加渠道、Base URL、API Key 或自定义模型。
 - 登录复用词元API 的会话：画布先用刷新 Cookie 调 `/api/user/auth/refresh` 换取短期 Bearer 令牌，再访问 `/api/canvas/bootstrap`；不能只带 Cookie，否则会被 New API 判定为未登录并与登录页反复互跳。钱包余额显示同一用户的站内额度。
 - 画布不在用户 API 密钥里创建 Key：登录会话换取的短期 Bearer 由服务端 `SessionOrTokenAuth` 转成不落库、仅限画布模型的临时令牌，费用照常从用户钱包或订阅扣除。历史上自动创建的「词元画布（自动）」Key 会在下次加载画布时软删除。
-- 图片支持 `gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`、`gpt-image-2.6-flare`、`gpt-image-2.6-sunburst` 与 `banana-2.1`；视频支持 Seedance 七档（即梦）、Wan 3 个、视频超分、MiniMax-H3 与 Grok 2 个，Kling 已下架。反推提示词/图片问答使用 13 个已实测能读图的文本模型：GPT 4 个、Claude 5 个、Gemini 2 个、MiniMax 2 个；GLM、Kimi、DeepSeek 因无渠道或限流未纳入。ciyuan 的图片问答走 `/pg/chat/completions` 流式会话通道。完整目录与参数以 `CUSTOMIZATIONS.md` C40 为准。
+- 图片支持 `gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`、`gpt-image-2.6-flare`、`gpt-image-2.6-sunburst`、`banana-2.1` 与 `grok-imagine-image-2.0`（共 6 款）；视频支持 Seedance 七档（即梦）、`Wan-3.0-720p/1080p`、`视频超分`、`MiniMax-H3`、Grok 2 个与 Omini 2 个（共 15 个可见视频 SKU），Kling 与 `MiniMax-H3-1080p` 已下架。反推提示词/图片问答按 `canvasModelCatalog` 登记 13 个读图文本模型（实际开放集合随后台启用模型过滤），走 `/pg/chat/completions` 流式会话通道。完整目录与参数以 `CUSTOMIZATIONS.md` C40 为准。
 - 视频创作台按后端 spec 开放参考图/参考视频/参考音乐，数量上限由模型决定；外部插件、本地 Agent、配置页和提示词站外抓取仍关闭。参考素材按最终字节 SHA-256 前 128 位去重：图片 JPEG/PNG 超过 2MB 或 2560px 时缩到 2560px 并重编码（JPEG q85、PNG 无损），带非正常 EXIF 方向的 JPEG 保持原样，源图最长边超过 6000px 拒绝；视频 MP4/WebM/MOV 单个 ≤50MB，音乐 MP3/WAV/M4A/OGG 单个 ≤20MB。素材按用户配额和保留期清理，默认 7 天、可设 1–30 天，项目引用免于保留期删除。
 - 画布项目、参考素材和生成素材同步到服务器：项目元数据存 PostgreSQL `canvas_projects`，载荷存 `/data/canvas-projects/<用户>/<项目>.json`，素材存 `/data/canvas-assets`（每用户 1 GiB 配额，保留期默认 7 天、可设 1–30 天）。IndexedDB 是本地缓存，新浏览器可从服务器恢复。顶栏提示服务器保留天数与项目同步，账户菜单显示服务器/本地用量并可在「存储与保留」里设置天数、立即清理、下载或删除素材；「我的资产」保留 `assets.json` + 图片/视频 Blob 的 ZIP 导入导出。契约见 `CUSTOMIZATIONS.md` C40。
 
