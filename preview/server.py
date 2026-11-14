@@ -65,6 +65,8 @@ BOOTSTRAP = {
         "models": [
             {"id": "gpt-image-2.5-flare", "capability": "image"},
             {"id": "gpt-image-2.5-sunburst", "capability": "image"},
+            {"id": "gpt-image-2.6-flare", "capability": "image"},
+            {"id": "gpt-image-2.6-sunburst", "capability": "image"},
             {"id": "banana-2.1", "capability": "image"},
             {
                 "id": "Wan-3.0-720p",
@@ -209,6 +211,8 @@ BOOTSTRAP = {
 ICON_BY_ID = {
     "gpt-image-2.5-flare": "OpenAI",
     "gpt-image-2.5-sunburst": "OpenAI",
+    "gpt-image-2.6-flare": "OpenAI",
+    "gpt-image-2.6-sunburst": "OpenAI",
     "banana-2.1": "NanoBanana.Color",
     "Wan-3.0-720p": "Qwen.Color",
     "Wan-3.0-1080p": "Qwen.Color",
@@ -235,6 +239,20 @@ IMAGE_SPECS = {
         "supports_background": True,
     },
     "gpt-image-2.5-sunburst": {
+        "qualities": ["auto", "low", "medium", "high", "xhigh", "max"],
+        "resolutions": ["1k", "2k", "4k", "auto"],
+        "ratios": ["1:1", "2:3", "3:2", "4:3", "3:4", "16:9", "9:16", "21:9", "9:21", "auto"],
+        "max_count": 15,
+        "supports_background": True,
+    },
+    "gpt-image-2.6-flare": {
+        "qualities": ["auto", "low", "medium", "high", "xhigh", "max"],
+        "resolutions": ["1k", "2k", "4k", "auto"],
+        "ratios": ["1:1", "2:3", "3:2", "4:3", "3:4", "16:9", "9:16", "21:9", "9:21", "auto"],
+        "max_count": 15,
+        "supports_background": True,
+    },
+    "gpt-image-2.6-sunburst": {
         "qualities": ["auto", "low", "medium", "high", "xhigh", "max"],
         "resolutions": ["1k", "2k", "4k", "auto"],
         "ratios": ["1:1", "2:3", "3:2", "4:3", "3:4", "16:9", "9:16", "21:9", "9:21", "auto"],
@@ -283,6 +301,9 @@ class Handler(SimpleHTTPRequestHandler):
         ".json": "application/json; charset=utf-8",
         ".svg": "image/svg+xml",
         ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
         ".mp4": "video/mp4",
     }
 
@@ -317,7 +338,7 @@ class Handler(SimpleHTTPRequestHandler):
         url_path = parsed.path
         if url_path.startswith("/canvas/"):
             rel = url_path[len("/canvas/") :]
-            if rel.startswith(("assets/", "icons/", "brand/")) or rel in ("config.js", "logo.svg", "plugins/index.json"):
+            if rel.startswith(("assets/", "icons/", "brand/", "templates/", "home/")) or rel in ("config.js", "logo.svg", "plugins/index.json"):
                 return os.path.join(ROOT, rel.replace("/", os.sep))
             return os.path.join(ROOT, "index.html")
         return os.path.join(ROOT, "index.html")
@@ -390,7 +411,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not rel:
                 self._html(render_index())
                 return
-            if rel.startswith(("assets/", "icons/", "brand/")) or rel in ("config.js", "logo.svg", "plugins/index.json"):
+            if rel.startswith(("assets/", "icons/", "brand/", "templates/", "home/")) or rel in ("config.js", "logo.svg", "plugins/index.json"):
                 super().do_GET()
                 return
             self._html(render_index())

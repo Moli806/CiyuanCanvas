@@ -4,6 +4,7 @@ import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Tag, Tooltip
 import localforage from "localforage";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 
 import { ImageSettingsPanel } from "@/components/image-settings-panel";
 import { ModelPicker } from "@/components/model-picker";
@@ -11,10 +12,11 @@ import { PromptOptimizerDialog } from "@/components/prompt-optimizer-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
+import { matchWorkbenchModelOption, resolveWorkbenchHandoff } from "@/lib/workbench-handoff";
 import { stageGeneratedImage } from "@/services/generated-image";
 import { beginImageAttempt, finishImageAttempt } from "@/services/image-attempts";
 import { fetchCanvasImageResult } from "@/services/ciyuan";
-import { modelOptionLabel, modelOptionName, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { modelOptionLabel, modelOptionName, selectableModelsByCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useCiyuanStore } from "@/stores/use-ciyuan-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
@@ -78,9 +80,11 @@ const settlingLogIds = new Set<string>();
 export default function ImagePage() {
     const { message } = App.useApp();
     const { t } = useTranslation();
+    const [searchParams, setSearchParams] = useSearchParams();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragDepthRef = useRef(0);
+    const appliedHandoffSearchRef = useRef("");
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
@@ -129,6 +133,32 @@ export default function ImagePage() {
     useEffect(() => {
         void refreshLogs(true);
     }, []);
+
+    useEffect(() => {
+        const rawSearch = searchParams.toString();
+        if (!rawSearch || appliedHandoffSearchRef.current === rawSearch) return;
+        const handoff = resolveWorkbenchHandoff({
+            search: rawSearch,
+            capability: "image",
+            storage: typeof window === "undefined" ? null : window.localStorage,
+        });
+        if (!handoff) return;
+        appliedHandoffSearchRef.current = rawSearch;
+        if (handoff.model) {
+            const latestConfig = { ...useConfigStore.getState().config, channelMode: "local" as const };
+            const matched = matchWorkbenchModelOption(handoff.model, selectableModelsByCapability(latestConfig, "image"));
+            if (matched) updateConfig("imageModel", matched);
+        }
+        if (handoff.prompt) {
+            setPrompt(handoff.prompt);
+            if (!running) {
+                setPreviewLog(null);
+                setResults([]);
+                setReferences([]);
+            }
+        }
+        setSearchParams(new URLSearchParams(handoff.cleanedSearch), { replace: true });
+    }, [running, searchParams, setSearchParams, updateConfig]);
 
     const addReferences = async (files?: FileList | null) => {
         const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/"));

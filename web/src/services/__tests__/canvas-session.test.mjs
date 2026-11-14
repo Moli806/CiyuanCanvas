@@ -29,6 +29,7 @@ function load(path, dependencies = {}, globals = {}) {
         Headers,
         Response,
         URL,
+        URLSearchParams,
         setTimeout,
         clearTimeout,
         console,
@@ -389,4 +390,61 @@ test("clearing account data waits for persisted state removal and removes fallba
     pending.resolve();
     await clearing;
     assert.equal(completed, true);
+});
+
+test("workbench handoff resolves inline URL params, long localStorage payloads, and matches catalog models", () => {
+    const handoffMod = load("lib/workbench-handoff.ts", {
+        "@/stores/use-config-store": {
+            modelOptionName: (value) => (value.includes("::") ? value.split("::")[1] : value),
+        },
+    });
+
+    const inline = handoffMod.resolveWorkbenchHandoff({
+        search: "?model=gpt-image-2.5-sunburst&prompt=%E6%9F%94%E5%85%89%E4%BA%BA%E5%83%8F&keep=1",
+        capability: "image",
+    });
+    assert.deepEqual({ ...inline }, {
+        model: "gpt-image-2.5-sunburst",
+        prompt: "柔光人像",
+        cleanedSearch: "keep=1",
+    });
+
+    const storeData = new Map([
+        [
+            handoffMod.SHOWCASE_CANVAS_HANDOFF_STORAGE_KEY,
+            JSON.stringify({
+                deadbeef: {
+                    capability: "video",
+                    model: "Seedance-2.5-720p",
+                    prompt: "超长电影级镜头提示词".repeat(120),
+                    createdAt: 1000,
+                },
+                expired1: {
+                    capability: "video",
+                    model: "Seedance-2.0-720p",
+                    prompt: "过期条目",
+                    createdAt: 1,
+                },
+            }),
+        ],
+    ]);
+    const storage = {
+        getItem: (key) => storeData.get(key) ?? null,
+        setItem: (key, val) => storeData.set(key, val),
+    };
+    const stashed = handoffMod.resolveWorkbenchHandoff({
+        search: "?model=Seedance-2.5-720p&handoff=deadbeef",
+        capability: "video",
+        storage,
+        now: 1000 + 30 * 60 * 1000 - 500,
+    });
+    assert.equal(stashed.model, "Seedance-2.5-720p");
+    assert.equal(stashed.prompt, "超长电影级镜头提示词".repeat(120));
+    assert.equal(stashed.cleanedSearch, "");
+    assert.equal(JSON.parse(storeData.get(handoffMod.SHOWCASE_CANVAS_HANDOFF_STORAGE_KEY)).expired1, undefined);
+
+    const options = ["ciyuan::gpt-image-2.5-sunburst", "ciyuan::Seedance-2.5-720p", "ciyuan::banana-2.1"];
+    assert.equal(handoffMod.matchWorkbenchModelOption("Seedance-2.5-720p", options), "ciyuan::Seedance-2.5-720p");
+    assert.equal(handoffMod.matchWorkbenchModelOption("seedance-2.5-720p", options), "ciyuan::Seedance-2.5-720p");
+    assert.equal(handoffMod.matchWorkbenchModelOption("non-existent-model", options), null);
 });

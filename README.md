@@ -10,6 +10,7 @@
 - 图片支持 `gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`、`gpt-image-2.6-flare`、`gpt-image-2.6-sunburst`、`banana-2.1` 与 `grok-imagine-image-2.0`（共 6 款）；视频支持 Seedance 七档（即梦）、`Wan-3.0-720p/1080p`、`视频超分`、`MiniMax-H3`、Grok 2 个与 Omini 2 个（共 15 个可见视频 SKU），Kling 与 `MiniMax-H3-1080p` 已下架。反推提示词/图片问答按 `canvasModelCatalog` 登记 13 个读图文本模型（实际开放集合随后台启用模型过滤），走 `/pg/chat/completions` 流式会话通道。完整目录与参数以 `CUSTOMIZATIONS.md` C40 为准。
 - 视频创作台按后端 spec 开放参考图/参考视频/参考音乐，数量上限由模型决定；外部插件、本地 Agent、配置页和提示词站外抓取仍关闭。参考素材按最终字节 SHA-256 前 128 位去重：图片 JPEG/PNG 超过 2MB 或 2560px 时缩到 2560px 并重编码（JPEG q85、PNG 无损），带非正常 EXIF 方向的 JPEG 保持原样，源图最长边超过 6000px 拒绝；视频 MP4/WebM/MOV 单个 ≤50MB，音乐 MP3/WAV/M4A/OGG 单个 ≤20MB。素材按用户配额和保留期清理，默认 7 天、可设 1–30 天，项目引用免于保留期删除。
 - 画布项目、参考素材和生成素材同步到服务器：项目元数据存 PostgreSQL `canvas_projects`，载荷存 `/data/canvas-projects/<用户>/<项目>.json`，素材存 `/data/canvas-assets`（每用户 1 GiB 配额，保留期默认 7 天、可设 1–30 天）。IndexedDB 是本地缓存，新浏览器可从服务器恢复。顶栏提示服务器保留天数与项目同步，账户菜单显示服务器/本地用量并可在「存储与保留」里设置天数、立即清理、下载或删除素材；「我的资产」保留 `assets.json` + 图片/视频 Blob 的 ZIP 导入导出。契约见 `CUSTOMIZATIONS.md` C40。
+- 内置官方预设工作流「🎬【官方预设】角色三视图到电影短片 · 一键出片」（`preset-rooftop-chase-v1`）：未删除时自动为所有登录用户初始化，「我的画布」页置顶提供打开与新建副本入口。未改动节点与参数时免扣费分阶段模拟真实生成（约 23 秒）；替换参考图或修改提示词/参数后提示确认并按拓扑顺序调用真实模型。演示成片 `web/public/templates/rooftop-chase/final-video.mp4` 因体积限制由 `.gitignore` 忽略，部署时与服务器 `/opt/new-api/data/showcase-assets/723a4763415d7154e2199bf364622a93.mp4`（同 SHA-256 `723a4763…`）同步至 `/srv/ciyuan-canvas/templates/rooftop-chase/final-video.mp4`。
 
 ## 构建
 
@@ -93,6 +94,7 @@ python preview/server.py
 - `web/src/components/video-settings-panel.tsx`：按模型 `CanvasVideoSpec` 动态渲染清晰度、比例、秒数和模式。
 - `web/src/components/image-settings-panel.tsx`：按模型 `CanvasImageSpec` 动态渲染质量、清晰度、比例、张数和透明背景。
 - `web/src/components/layout/brand-logo.tsx`、`web/public/brand/`：词元 logo 透明底，浅色用黑标、深色用白标；浏览器 favicon 固定使用透明黑标，避免浅色标签栏不可见。
+- `web/src/lib/canvas/canvas-preset-workflow.ts`、`web/public/templates/rooftop-chase/`：官方预设 12 节点一键出片工作流、免扣费分阶段仿真与改动检测。
 - `preview/server.py`：本地 UI 预览，模拟接口，不部署。
 
 ## 新增模型

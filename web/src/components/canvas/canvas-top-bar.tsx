@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Download, Home, Images, Keyboard, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, Undo2, Upload } from "lucide-react";
+import { BookOpen, Download, Home, Images, Keyboard, LoaderCircle, Menu, PanelLeftClose, PanelLeftOpen, Play, Plus, Redo2, RotateCcw, Sparkles, Square, Trash2, Undo2, Upload } from "lucide-react";
 import { Dropdown, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
@@ -22,11 +22,19 @@ export function CanvasTopBar({
     onHome,
     onProjects,
     onCreateProject,
+    onCreatePresetProject,
     onDeleteProject,
     onExportProject,
     onImportImage,
     onUndo,
     onRedo,
+    hasWorkflow,
+    isFreePresetDemo,
+    canResetPreset,
+    workflowProgress,
+    onRunWorkflow,
+    onStopWorkflow,
+    onResetPreset,
 }: {
     title: string;
     titleDraft: string;
@@ -40,11 +48,19 @@ export function CanvasTopBar({
     onHome: () => void;
     onProjects: () => void;
     onCreateProject: () => void;
+    onCreatePresetProject?: () => void;
     onDeleteProject: () => void;
     onExportProject: () => void;
     onImportImage: () => void;
     onUndo: () => void;
     onRedo: () => void;
+    hasWorkflow?: boolean;
+    isFreePresetDemo?: boolean;
+    canResetPreset?: boolean;
+    workflowProgress?: { current: number; total: number; label: string } | null;
+    onRunWorkflow?: () => void;
+    onStopWorkflow?: () => void;
+    onResetPreset?: () => void;
 }) {
     const colorTheme = useThemeStore((state) => state.theme);
     const { t } = useTranslation();
@@ -87,6 +103,7 @@ export function CanvasTopBar({
                                 { key: "projects", icon: <Images className="size-4" />, label: t("canvas.projects"), onClick: onProjects },
                                 { type: "divider" },
                                 { key: "new", icon: <Plus className="size-4" />, label: t("canvas.create"), onClick: onCreateProject },
+                                ...(onCreatePresetProject ? [{ key: "new-template", icon: <Sparkles className="size-4" />, label: t("canvas.createFromTemplate"), onClick: onCreatePresetProject }] : []),
                                 { key: "delete", danger: true, icon: <Trash2 className="size-4" />, label: t("canvas.deleteCurrent"), onClick: onDeleteProject },
                                 { type: "divider" },
                                 { key: "import", icon: <Upload className="size-4" />, label: t("canvas.importAsset"), onClick: onImportImage },
@@ -132,6 +149,46 @@ export function CanvasTopBar({
                 </div>
 
                 <div className="pointer-events-auto flex items-center gap-1.5">
+                    {hasWorkflow ? (
+                        workflowProgress ? (
+                            <button
+                                type="button"
+                                onClick={onStopWorkflow}
+                                className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-lg px-2.5 text-xs font-medium transition hover:bg-black/5 dark:hover:bg-white/10"
+                                style={{ color: theme.node.activeStroke }}
+                                title={t("canvas.workflow.stop")}
+                            >
+                                <LoaderCircle className="size-3.5 animate-spin" />
+                                <span className="max-w-[260px] truncate">{t("canvas.workflow.runningStage", workflowProgress)}</span>
+                                <Square className="size-3 fill-current" />
+                            </button>
+                        ) : (
+                            <>
+                                {canResetPreset && onResetPreset ? (
+                                    <button
+                                        type="button"
+                                        onClick={onResetPreset}
+                                        className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition hover:bg-black/5 dark:hover:bg-white/10"
+                                        style={{ color: theme.node.muted }}
+                                    >
+                                        <RotateCcw className="size-3.5" />
+                                        <span className="hidden sm:inline">{t("canvas.workflow.resetPreset")}</span>
+                                    </button>
+                                ) : null}
+                                {onRunWorkflow ? (
+                                    <button
+                                        type="button"
+                                        onClick={onRunWorkflow}
+                                        className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition hover:bg-black/5 dark:hover:bg-white/10"
+                                        style={{ color: theme.node.activeStroke }}
+                                    >
+                                        <Play className="size-3.5 fill-current" />
+                                        <span>{isFreePresetDemo ? t("canvas.workflow.runAllFree") : t("canvas.workflow.runAll")}</span>
+                                    </button>
+                                ) : null}
+                            </>
+                        )
+                    ) : null}
                     <CiyuanUserActions variant="canvas" />
                 </div>
             </div>

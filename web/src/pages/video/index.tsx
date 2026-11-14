@@ -5,6 +5,7 @@ import localforage from "localforage";
 import { nanoid } from "nanoid";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { ModelPicker } from "@/components/model-picker";
@@ -12,6 +13,7 @@ import { PromptOptimizerDialog } from "@/components/prompt-optimizer-dialog";
 import { VideoSettingsPanel, normalizeVideoResolutionValue, normalizeVideoSizeValue, videoModeLabel, videoSizeLabel } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { clampVideoSeconds } from "@/lib/media-size";
+import { matchWorkbenchModelOption, resolveWorkbenchHandoff } from "@/lib/workbench-handoff";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import { resolveImageUrl, ensureImagePreview, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
@@ -19,7 +21,7 @@ import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo
 import { getCiyuanModel, type CiyuanVideoSpec } from "@/services/ciyuan";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
-import { boolConfig, modelOptionLabel, modelOptionName, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { boolConfig, modelOptionLabel, modelOptionName, selectableModelsByCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -88,11 +90,13 @@ function videoReferenceLimits(spec: CiyuanVideoSpec | undefined, framesMode: boo
 export default function VideoPage() {
     const { message } = App.useApp();
     const { t } = useTranslation();
+    const [searchParams, setSearchParams] = useSearchParams();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const videoInputRef = useRef<HTMLInputElement>(null);
     const audioInputRef = useRef<HTMLInputElement>(null);
     const dragDepthRef = useRef(0);
+    const appliedHandoffSearchRef = useRef("");
     const activeLogIdsRef = useRef<Set<string>>(new Set());
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
@@ -150,6 +154,35 @@ export default function VideoPage() {
     useEffect(() => {
         void refreshLogs();
     }, []);
+
+    useEffect(() => {
+        const rawSearch = searchParams.toString();
+        if (!rawSearch || appliedHandoffSearchRef.current === rawSearch) return;
+        const handoff = resolveWorkbenchHandoff({
+            search: rawSearch,
+            capability: "video",
+            storage: typeof window === "undefined" ? null : window.localStorage,
+        });
+        if (!handoff) return;
+        appliedHandoffSearchRef.current = rawSearch;
+        if (handoff.model) {
+            const latestConfig = { ...useConfigStore.getState().config, channelMode: "local" as const };
+            const matched = matchWorkbenchModelOption(handoff.model, selectableModelsByCapability(latestConfig, "video"));
+            if (matched) updateConfig("videoModel", matched);
+        }
+        if (handoff.prompt) {
+            setPrompt(handoff.prompt);
+            updateConfig("videoMode", "reference");
+            if (!running) {
+                setPreviewLog(null);
+                setResults([]);
+                setReferences([]);
+                setVideoReferences([]);
+                setAudioReferences([]);
+            }
+        }
+        setSearchParams(new URLSearchParams(handoff.cleanedSearch), { replace: true });
+    }, [running, searchParams, setSearchParams, updateConfig]);
 
     useEffect(() => {
         const onVisible = () => {

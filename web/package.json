@@ -9,7 +9,7 @@
         "build:canvas": "vite build --base=/canvas/",
         "typecheck": "tsc --noEmit",
         "test": "bun test",
-        "test:canvas-session": "node --test src/services/__tests__/canvas-session.test.mjs",
+        "test:canvas-session": "node --test src/services/__tests__/canvas-session.test.mjs src/services/__tests__/canvas-preset-workflow.test.mjs",
         "start": "vite preview --host 0.0.0.0 --port 3000",
         "format": "prettier --write .",
         "format:check": "prettier --check ."

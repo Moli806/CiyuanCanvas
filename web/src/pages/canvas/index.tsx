@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { App, Button } from "antd";
-import { Download, FileUp, Plus } from "lucide-react";
+import { App, Button, theme as antdTheme } from "antd";
+import { CopyPlus, Download, FileUp, Play, Plus, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { readZip } from "@/lib/zip";
@@ -13,10 +13,12 @@ import type { CanvasExportFile } from "@/types/canvas-export";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useCanvasUiStore } from "@/stores/canvas/use-canvas-ui-store";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
+import { PRESET_ASSETS, PRESET_WORKFLOW_PROJECT_ID } from "@/lib/canvas/canvas-preset-workflow";
 import { hasAgentUrlBootstrap } from "@/lib/agent/agent-url-bootstrap";
 
 export default function CanvasPage() {
     const { message } = App.useApp();
+    const { token } = antdTheme.useToken();
     const { t } = useTranslation();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
@@ -25,9 +27,11 @@ export default function CanvasPage() {
     const hydrated = useCanvasStore((state) => state.hydrated);
     const projects = useCanvasStore((state) => state.projects);
     const createProject = useCanvasStore((state) => state.createProject);
+    const createPresetProject = useCanvasStore((state) => state.createPresetProject);
     const importProject = useCanvasStore((state) => state.importProject);
     const selectedIds = useCanvasUiStore((state) => state.selectedProjectIds);
     const setDeleteIds = useCanvasUiStore((state) => state.setDeleteProjectIds);
+    const hasDefaultPreset = projects.some((item) => item.id === PRESET_WORKFLOW_PROJECT_ID);
 
     const mode = searchParams.get("mode");
     const agentMode = mode === "new" || mode === "recent" || mode === "choose";
@@ -37,6 +41,8 @@ export default function CanvasPage() {
         navigate(`/canvas/${id}${agentQuery}${agentHash}`, { replace: Boolean(agentHash) });
     };
     const createAndEnter = () => enterProject(createProject(t("canvas.defaultTitle", { count: projects.length + 1 })));
+    const openOrRestorePreset = () => enterProject(createPresetProject(false));
+    const createPresetCopy = () => enterProject(createPresetProject(true));
     const importCanvas = async (file?: File) => {
         if (!file) return;
         try {
@@ -103,6 +109,47 @@ export default function CanvasPage() {
                         </Button>
                     </div>
                 </header>
+
+                <section
+                    className="flex flex-col justify-between gap-5 rounded-2xl border p-6 lg:flex-row lg:items-center"
+                    style={{ background: token.colorFillAlter, borderColor: token.colorBorderSecondary }}
+                >
+                    <div className="min-w-0 flex-1 space-y-2.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span className="inline-flex items-center gap-1.5 text-xs font-semibold" style={{ color: token.colorPrimary }}>
+                                <Sparkles className="size-3.5" />
+                                {t("canvas.templatesTitle")}
+                            </span>
+                            <span
+                                className="rounded-md px-2 py-0.5 text-xs font-medium"
+                                style={{ background: token.colorPrimaryBg, color: token.colorPrimary }}
+                            >
+                                {t("canvas.templateBadgeFree")}
+                            </span>
+                        </div>
+                        <h2 className="text-xl font-semibold" style={{ color: token.colorText }}>
+                            {t("canvas.templateCardTitle")}
+                        </h2>
+                        <p className="text-sm leading-6" style={{ color: token.colorTextSecondary }}>
+                            {t("canvas.templateCardDesc")}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-2.5 pt-1">
+                            <Button disabled={!hydrated} type="primary" icon={<Play className="size-4" />} onClick={openOrRestorePreset}>
+                                {t("canvas.templateOpenExisting")}
+                            </Button>
+                            {hasDefaultPreset ? (
+                                <Button disabled={!hydrated} icon={<CopyPlus className="size-4" />} onClick={createPresetCopy}>
+                                    {t("canvas.templateCreateCopy")}
+                                </Button>
+                            ) : null}
+                        </div>
+                    </div>
+                    <div className="grid shrink-0 grid-cols-3 gap-2.5 sm:w-[360px]" onClick={() => hydrated && openOrRestorePreset()} style={{ cursor: hydrated ? "pointer" : "default" }}>
+                        <img src={PRESET_ASSETS.portrait.url} alt="" className="h-24 w-full rounded-xl object-cover" />
+                        <img src={PRESET_ASSETS.threeView.url} alt="" className="h-24 w-full rounded-xl object-cover" />
+                        <img src={PRESET_ASSETS.storyboard.url} alt="" className="h-24 w-full rounded-xl object-cover" />
+                    </div>
+                </section>
 
                 {!hydrated ? (
                     <section className="flex min-h-[360px] items-center justify-center border-y border-stone-200 text-sm text-stone-500 dark:border-stone-800">{t("canvas.loading")}</section>

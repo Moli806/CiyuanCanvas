@@ -3,6 +3,7 @@ import { Button } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { BrandLogo } from "@/components/layout/brand-logo";
+import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useCiyuanStore } from "@/stores/use-ciyuan-store";
 import { pullAndMergeCanvasProjects } from "@/services/canvas-project-sync";
 import { resumeImageAttempts } from "@/services/image-attempts";
@@ -29,6 +30,7 @@ export function CiyuanGate({ children }: { children: ReactNode }) {
         void (async () => {
             await pullAndMergeCanvasProjects().catch(() => undefined);
             if (cancelled) return;
+            useCanvasStore.getState().ensureDefaultPresetProject();
             const recovered = await resumeImageAttempts().catch(() => 0);
             if (!cancelled && recovered > 0) useCiyuanStore.getState().setRecoveredImages(recovered);
         })();
