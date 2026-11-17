@@ -479,3 +479,46 @@ test("uploadCanvasAsset marks generated media with source=generated while keepin
     assert.equal(forms[0].get("source"), null);
     assert.equal(forms[1].get("source"), "generated");
 });
+
+test("requestCiyuanChatQuestion buffers and parses SSE when WebView response.body lacks getReader()", async () => {
+    const rawSse = [
+        'data: {"choices":[{"delta":{"content":"柔光霓虹雨夜，"}}]}',
+        "",
+        'data: {"choices":[{"delta":{"content":"蓝鲸少女抬头望向浮空岛"}}]}',
+        "",
+        "data: [DONE]",
+        "",
+    ].join("\n");
+
+    const deltas = [];
+    const mod = load(
+        "services/ciyuan.ts",
+        {},
+        {
+            window: { location: { origin: "https://ciyuanweb.cn" } },
+            fetch: async (path) => {
+                if (path === "/api/user/auth/refresh") {
+                    return Response.json({ success: true, data: { access_token: "test-token", access_expires_at: 9999999999 } });
+                }
+                if (path === "https://ciyuanweb.cn/pg/chat/completions") {
+                    return {
+                        ok: true,
+                        status: 200,
+                        headers: new Headers({ "content-type": "text/event-stream; charset=utf-8" }),
+                        body: null,
+                        text: async () => rawSse,
+                    };
+                }
+                throw new Error(`unexpected path: ${path}`);
+            },
+        },
+    );
+
+    const answer = await mod.requestCiyuanChatQuestion(
+        { baseUrl: "https://ciyuanweb.cn/v1", model: "deepseek-v4.1-flash" },
+        [{ role: "user", content: "反推这张图提示词" }],
+        (partial) => deltas.push(partial),
+    );
+    assert.equal(answer, "柔光霓虹雨夜，蓝鲸少女抬头望向浮空岛");
+    assert.deepEqual(deltas, ["柔光霓虹雨夜，", "柔光霓虹雨夜，蓝鲸少女抬头望向浮空岛"]);
+});

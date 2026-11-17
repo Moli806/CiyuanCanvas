@@ -499,22 +499,33 @@ async function requestStreamingResponse(config: AiConfig, body: Record<string, u
                   signal: options?.signal,
               });
     if (!response.ok) throw new Error(await readFetchError(response, apiText("requestFailed")));
-    if (!response.body) {
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
         const payload = (await response.json()) as ResponseApiPayload;
         validateResponsePayload(payload);
         return parseToolResponse(payload);
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
     const state: ResponseStreamState = { buffer: "", text: "" };
-    for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        consumeResponseStreamText(state, decoder.decode(value, { stream: true }), onDelta);
-        if (state.error) throw new Error(state.error);
+    if (response.body && typeof response.body.getReader === "function") {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            consumeResponseStreamText(state, decoder.decode(value, { stream: true }), onDelta);
+            if (state.error) throw new Error(state.error);
+        }
+        consumeResponseStreamText(state, decoder.decode(), onDelta, true);
+    } else {
+        const rawText = await response.text();
+        consumeResponseStreamText(state, rawText, onDelta, true);
+        if (!state.payload && !state.text && !state.error) {
+            const jsonPayload = JSON.parse(rawText) as ResponseApiPayload;
+            validateResponsePayload(jsonPayload);
+            return parseToolResponse(jsonPayload);
+        }
     }
-    consumeResponseStreamText(state, decoder.decode(), onDelta, true);
     if (state.error) throw new Error(state.error);
     if (!state.payload) return { content: state.text, toolCalls: [] };
     validateResponsePayload(state.payload);
@@ -606,21 +617,31 @@ async function requestGeminiStreamingResponse(config: AiConfig, body: Record<str
         signal: options?.signal,
     });
     if (!response.ok) throw new Error(await readFetchError(response, apiText("requestFailed")));
-    if (!response.body) {
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
         const payload = (await response.json()) as GeminiPayload;
         return parseGeminiToolResponse(payload);
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
     const state: GeminiStreamState = { buffer: "", text: "", toolCalls: [] };
-    for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        consumeGeminiStreamText(state, decoder.decode(value, { stream: true }), onDelta);
-        if (state.error) throw new Error(state.error);
+    if (response.body && typeof response.body.getReader === "function") {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            consumeGeminiStreamText(state, decoder.decode(value, { stream: true }), onDelta);
+            if (state.error) throw new Error(state.error);
+        }
+        consumeGeminiStreamText(state, decoder.decode(), onDelta, true);
+    } else {
+        const rawText = await response.text();
+        consumeGeminiStreamText(state, rawText, onDelta, true);
+        if (!state.text && !state.toolCalls.length && !state.error) {
+            const jsonPayload = JSON.parse(rawText) as GeminiPayload;
+            return parseGeminiToolResponse(jsonPayload);
+        }
     }
-    consumeGeminiStreamText(state, decoder.decode(), onDelta, true);
     if (state.error) throw new Error(state.error);
     return { content: state.text, toolCalls: state.toolCalls };
 }

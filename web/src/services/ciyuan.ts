@@ -540,15 +540,13 @@ export async function requestCiyuanChatQuestion(config: AiConfig, messages: Ciyu
         throw new Error(message || "反推提示词请求失败");
     }
     const contentType = response.headers.get("content-type") || "";
-    if (!response.body || contentType.includes("application/json")) {
+    if (contentType.includes("application/json")) {
         const payload = (await response.json().catch(() => null)) as ChatCompletionPayload | null;
         const content = chatCompletionText(payload);
         if (content) onDelta?.(content);
         return content;
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
     let buffer = "";
     let content = "";
     let sawDelta = false;
@@ -581,18 +579,30 @@ export async function requestCiyuanChatQuestion(config: AiConfig, messages: Ciyu
             }
         }
     };
-    for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+    let rawFallback = "";
+    if (response.body && typeof response.body.getReader === "function") {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const blocks = buffer.split(/\r?\n\r?\n/);
+            buffer = blocks.pop() || "";
+            blocks.forEach(consume);
+        }
+        buffer += decoder.decode();
+        rawFallback = buffer;
+    } else {
+        buffer = await response.text();
+        rawFallback = buffer;
         const blocks = buffer.split(/\r?\n\r?\n/);
         buffer = blocks.pop() || "";
         blocks.forEach(consume);
     }
-    buffer += decoder.decode();
     if (buffer.trim()) consume(buffer);
     if (!content) {
-        const fallback = chatCompletionTextFromText(buffer);
+        const fallback = chatCompletionTextFromText(rawFallback);
         if (fallback) {
             content = fallback;
             onDelta?.(content);
