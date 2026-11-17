@@ -292,9 +292,14 @@ export async function logoutCiyuan() {
     await fetch("/api/user/auth/logout", { method: "POST", credentials: "include" }).catch(() => undefined);
 }
 
-export async function uploadCanvasAsset(source: string | Blob, name = "ref.png", signal?: AbortSignal): Promise<string> {
+export type CanvasAssetSource = "upload" | "generated";
+
+export async function uploadCanvasAsset(source: string | Blob, name = "ref.png", signal?: AbortSignal, assetSource: CanvasAssetSource = "upload"): Promise<string> {
     const blob = typeof source === "string" ? await (await fetch(source, { signal })).blob() : source;
     const form = new FormData();
+    if (assetSource === "generated") {
+        form.append("source", "generated");
+    }
     form.append("file", blob, name);
     const response = await sessionRequest("/api/canvas/assets", { method: "POST", body: form, signal });
     if (response.status === 401 || response.redirected || !response.headers.get("content-type")?.includes("application/json")) {
@@ -302,7 +307,7 @@ export async function uploadCanvasAsset(source: string | Blob, name = "ref.png",
     }
     const payload = (await response.json().catch(() => null)) as { success?: boolean; message?: string; data?: { path?: string } } | null;
     if (!response.ok || !payload?.success || !payload.data?.path) {
-        throw new Error(readMessage(payload) || "参考素材上传失败");
+        throw new Error(readMessage(payload) || (assetSource === "generated" ? "生成结果保存失败" : "参考素材上传失败"));
     }
     return new URL(payload.data.path, window.location.origin).toString();
 }
@@ -411,7 +416,7 @@ export async function requestCiyuanBananaImages(config: AiConfig, prompt: string
         const dataUrl = await blobToDataUrl(blob);
         let serverUrl: string | undefined;
         try {
-            serverUrl = await uploadCanvasAsset(blob, "banana.png", signal);
+            serverUrl = await uploadCanvasAsset(blob, "banana.png", signal, "generated");
         } catch {
             serverUrl = undefined;
         }

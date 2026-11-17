@@ -93,7 +93,7 @@ export async function resumeImageAttempts(): Promise<number> {
 /** Mirror a generated media blob into the server asset store; returns its public path or null. */
 export async function mirrorGeneratedMedia(blob: Blob, name: string): Promise<string | null> {
     try {
-        return await uploadCanvasAsset(blob, name);
+        return await uploadCanvasAsset(blob, name, undefined, "generated");
     } catch {
         return null;
     }

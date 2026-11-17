@@ -448,3 +448,34 @@ test("workbench handoff resolves inline URL params, long localStorage payloads, 
     assert.equal(handoffMod.matchWorkbenchModelOption("seedance-2.5-720p", options), "ciyuan::Seedance-2.5-720p");
     assert.equal(handoffMod.matchWorkbenchModelOption("non-existent-model", options), null);
 });
+
+test("uploadCanvasAsset marks generated media with source=generated while keeping reference uploads unmarked", async () => {
+    const forms = [];
+    const mod = load(
+        "services/ciyuan.ts",
+        {},
+        {
+            Blob,
+            FormData,
+            window: { location: { origin: "https://ciyuanweb.cn" } },
+            fetch: async (path, init) => {
+                if (path === "/api/user/auth/refresh") {
+                    return Response.json({ success: true, data: { access_token: "test-token", access_expires_at: 9999999999 } });
+                }
+                if (path === "/api/canvas/assets") {
+                    forms.push(init.body);
+                    return Response.json({ success: true, data: { path: "/canvas-assets/0123456789abcdef0123456789abcdef.jpg" } });
+                }
+                throw new Error(`unexpected path: ${path}`);
+            },
+        },
+    );
+
+    const sample = new Blob([new Uint8Array([1, 2, 3])], { type: "image/jpeg" });
+    const refUrl = await mod.uploadCanvasAsset(sample, "ref.png");
+    const genUrl = await mod.uploadCanvasAsset(sample, "banana.png", undefined, "generated");
+    assert.equal(refUrl, "https://ciyuanweb.cn/canvas-assets/0123456789abcdef0123456789abcdef.jpg");
+    assert.equal(genUrl, "https://ciyuanweb.cn/canvas-assets/0123456789abcdef0123456789abcdef.jpg");
+    assert.equal(forms[0].get("source"), null);
+    assert.equal(forms[1].get("source"), "generated");
+});

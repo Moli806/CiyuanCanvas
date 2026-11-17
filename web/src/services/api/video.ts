@@ -160,12 +160,12 @@ async function storeVideoLocally(result: VideoGenerationResult): Promise<Uploade
 // copy next to the canvas reference assets; the IndexedDB blob is only a cache.
 async function mirrorMedia(stored: UploadedFile, result: VideoGenerationResult): Promise<string | undefined> {
     try {
-        if (result.blob) return await uploadCanvasAsset(result.blob, "video.mp4");
+        if (result.blob) return await uploadCanvasAsset(result.blob, "video.mp4", undefined, "generated");
         if (stored.storageKey) {
             const blob = await getMediaBlob(stored.storageKey);
-            if (blob) return await uploadCanvasAsset(blob, "video.mp4");
+            if (blob) return await uploadCanvasAsset(blob, "video.mp4", undefined, "generated");
         }
-        if (result.url) return await uploadCanvasAsset(result.url, "video.mp4");
+        if (result.url) return await uploadCanvasAsset(result.url, "video.mp4", undefined, "generated");
     } catch {
         return undefined;
     }
