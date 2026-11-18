@@ -522,3 +522,33 @@ test("requestCiyuanChatQuestion buffers and parses SSE when WebView response.bod
     assert.equal(answer, "柔光霓虹雨夜，蓝鲸少女抬头望向浮空岛");
     assert.deepEqual(deltas, ["柔光霓虹雨夜，", "柔光霓虹雨夜，蓝鲸少女抬头望向浮空岛"]);
 });
+
+test("ciyuanSessionFetch refuses WHATWG backslash and tab cross-origin URLs", async () => {
+    const seen = [];
+    const mod = load(
+        "services/ciyuan.ts",
+        {},
+        {
+            window: { location: { origin: "https://ciyuanweb.cn" } },
+            fetch: async (path, init = {}) => {
+                seen.push({ path, auth: new Headers(init.headers).get("Authorization"), credentials: init.credentials });
+                if (path === "/api/user/auth/refresh") {
+                    return Response.json({ success: true, data: { access_token: "secret-session-token", access_expires_at: 9999999999 } });
+                }
+                return Response.json({ ok: true });
+            },
+        },
+    );
+
+    await mod.ciyuanSessionFetch("/\\evil.example/pg/chat/completions");
+    await mod.ciyuanSessionFetch("/\t/evil.example/pg/chat/completions");
+    await mod.ciyuanSessionFetch("/api/canvas/projects");
+
+    assert.equal(seen[0].auth, null);
+    assert.equal(seen[0].credentials, "omit");
+    assert.equal(seen[1].auth, null);
+    assert.equal(seen[1].credentials, "omit");
+    const projectCall = seen.find((item) => item.path === "/api/canvas/projects");
+    assert.equal(projectCall.auth, "Bearer secret-session-token");
+    assert.equal(projectCall.credentials, "include");
+});

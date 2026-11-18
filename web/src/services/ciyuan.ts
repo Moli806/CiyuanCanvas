@@ -219,16 +219,33 @@ async function getSessionAccessToken(force = false): Promise<string> {
     return refreshSessionOnce();
 }
 
+function isSameOriginUrl(url: string): boolean {
+    try {
+        const baseOrigin =
+            typeof window !== "undefined" && window.location?.origin
+                ? window.location.origin
+                : "https://ciyuan.local";
+        const parsed = new URL(url, baseOrigin);
+        if (typeof window === "undefined" || !window.location?.origin) {
+            return parsed.origin === baseOrigin && !/^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(url.trim());
+        }
+        return parsed.origin === baseOrigin;
+    } catch {
+        return false;
+    }
+}
+
 async function sessionRequest(path: string, init: RequestInit = {}): Promise<Response> {
+    const sameOrigin = isSameOriginUrl(path);
     const version = sessionVersion;
-    const token = await getSessionAccessToken();
+    const token = sameOrigin ? await getSessionAccessToken() : "";
     if (version !== sessionVersion) throw new DOMException("Session changed", "AbortError");
     init.signal?.throwIfAborted();
     const headers = new Headers(init.headers);
-    headers.set("Authorization", `Bearer ${token}`);
-    const response = await fetch(path, { ...init, headers, credentials: "include" });
+    if (sameOrigin && token) headers.set("Authorization", `Bearer ${token}`);
+    const response = await fetch(path, { ...init, headers, credentials: sameOrigin ? "include" : "omit" });
     if (version !== sessionVersion) throw new DOMException("Session changed", "AbortError");
-    if (response.status !== 401) return response;
+    if (!sameOrigin || response.status !== 401) return response;
 
     sessionAccessToken = null;
     const retryHeaders = new Headers(init.headers);
