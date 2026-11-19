@@ -305,15 +305,7 @@ function mergeCanvasData(local: CanvasDomainData, remote: CanvasDomainData): Can
         if (!current || item.deletedAt >= current) deletedAtById.set(item.id, item.deletedAt);
     }
 
-    const projects = mergeById(local.projects || [], remote.projects || [], "updatedAt").filter((project) => {
-        const deletedAt = deletedAtById.get(project.id);
-        if (!deletedAt) return true;
-        if (getTime(project as Record<string, unknown>, "updatedAt") > Date.parse(deletedAt)) {
-            deletedAtById.delete(project.id);
-            return true;
-        }
-        return false;
-    });
+    const projects = mergeById(local.projects || [], remote.projects || [], "updatedAt").filter((project) => !deletedAtById.has(project.id));
 
     return {
         projects,

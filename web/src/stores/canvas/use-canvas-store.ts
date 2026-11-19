@@ -4,7 +4,7 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { localForageStorage } from "@/lib/localforage-storage";
-import { createPresetWorkflowCopyTitle, createPresetWorkflowProject, PRESET_WORKFLOW_PROJECT_ID } from "@/lib/canvas/canvas-preset-workflow";
+import { createPresetWorkflowCopyTitle, createPresetWorkflowProject, isDefaultPresetProjectId, PRESET_WORKFLOW_PROJECT_ID, RESTORED_PRESET_PROJECT_PREFIX } from "@/lib/canvas/canvas-preset-workflow";
 import { scheduleCanvasSync } from "@/services/canvas-project-sync";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, ViewportTransform } from "@/types/canvas";
@@ -111,16 +111,14 @@ export const useCanvasStore = create<CanvasStore>()(
             createPresetProject: (asCopy = false) => {
                 const state = get();
                 if (!asCopy) {
-                    const existing = state.projects.find((item) => item.id === PRESET_WORKFLOW_PROJECT_ID);
+                    const existing = state.projects.find((item) => isDefaultPresetProjectId(item.id));
                     if (existing) return existing.id;
-                    const preset = createPresetWorkflowProject();
-                    set((current) => ({
-                        projects: [preset, ...current.projects],
-                        deletedProjects: current.deletedProjects.filter((item) => item.id !== PRESET_WORKFLOW_PROJECT_ID),
-                    }));
+                    const id = state.deletedProjects.some((item) => item.id === PRESET_WORKFLOW_PROJECT_ID) ? `${RESTORED_PRESET_PROJECT_PREFIX}${nanoid()}` : PRESET_WORKFLOW_PROJECT_ID;
+                    const preset = createPresetWorkflowProject(id);
+                    set((current) => ({ projects: [preset, ...current.projects] }));
                     return preset.id;
                 }
-                const presetCopies = state.projects.filter((item) => item.id === PRESET_WORKFLOW_PROJECT_ID || item.id.startsWith("preset-copy-")).length;
+                const presetCopies = state.projects.filter((item) => isDefaultPresetProjectId(item.id) || item.id.startsWith("preset-copy-")).length;
                 const copyId = `preset-copy-${nanoid(8)}`;
                 const copy = createPresetWorkflowProject(copyId, createPresetWorkflowCopyTitle(presetCopies));
                 set((current) => ({ projects: [copy, ...current.projects] }));
@@ -128,11 +126,11 @@ export const useCanvasStore = create<CanvasStore>()(
             },
             ensureDefaultPresetProject: () => {
                 const state = get();
-                if (state.projects.some((item) => item.id === PRESET_WORKFLOW_PROJECT_ID)) return;
+                if (state.projects.some((item) => isDefaultPresetProjectId(item.id))) return;
                 if (state.deletedProjects.some((item) => item.id === PRESET_WORKFLOW_PROJECT_ID)) return;
                 const preset = createPresetWorkflowProject();
                 set((current) => {
-                    if (current.projects.some((item) => item.id === PRESET_WORKFLOW_PROJECT_ID) || current.deletedProjects.some((item) => item.id === PRESET_WORKFLOW_PROJECT_ID)) {
+                    if (current.projects.some((item) => isDefaultPresetProjectId(item.id)) || current.deletedProjects.some((item) => item.id === PRESET_WORKFLOW_PROJECT_ID)) {
                         return current;
                     }
                     return { projects: [preset, ...current.projects] };
@@ -171,7 +169,11 @@ export const useCanvasStore = create<CanvasStore>()(
                     const deletedProjects = [...state.deletedProjects.filter((item) => !removing.has(item.id)), ...ids.map((id) => ({ id, deletedAt: now }))];
                     return { projects, deletedProjects };
                 }),
-            replaceProjects: (projects, deletedProjects = []) => set({ projects, deletedProjects }),
+            replaceProjects: (projects, deletedProjects = []) =>
+                set((state) => {
+                    const deletedById = new Map([...deletedProjects, ...state.deletedProjects].map((item) => [item.id, item]));
+                    return { projects: projects.filter(({ id }) => !deletedById.has(id)), deletedProjects: [...deletedById.values()] };
+                }),
             updateProject: (id, patch) =>
                 set((state) => ({
                     projects: state.projects.map((project) => (project.id === id ? { ...project, ...patch, updatedAt: new Date().toISOString() } : project)),

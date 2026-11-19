@@ -230,6 +230,7 @@ function InfiniteCanvasPage() {
     const renameProject = useCanvasStore((state) => state.renameProject);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
     const currentProject = useCanvasStore((state) => state.projects.find((project) => project.id === projectId));
+    const projectDeleted = useCanvasStore((state) => state.deletedProjects.some((project) => project.id === projectId));
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const [nodes, setNodes] = useState<CanvasNodeData[]>([]);
     const [connections, setConnections] = useState<CanvasConnection[]>([]);
@@ -477,7 +478,7 @@ function InfiniteCanvasPage() {
         if (!hydrated) return;
         setProjectLoaded(false);
         const project = openProject(projectId);
-        if (!project) {
+        if (!project || projectDeleted) {
             navigate("/canvas", { replace: true });
             return;
         }
@@ -509,7 +510,7 @@ function InfiniteCanvasPage() {
             setProjectLoaded(true);
         };
         void restore();
-    }, [hydrated, navigate, openProject, projectId]);
+    }, [hydrated, navigate, openProject, projectDeleted, projectId]);
 
     useEffect(() => {
         if (!projectLoaded) return;

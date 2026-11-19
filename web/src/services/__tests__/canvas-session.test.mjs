@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import { AxiosHeaders } from "axios";
 
 const root = new URL("../../", import.meta.url);
@@ -15,6 +16,7 @@ const deferred = () => {
     return { promise, resolve };
 };
 const turn = () => new Promise(setImmediate);
+class CanvasProjectDeletedError extends Error {}
 
 function load(path, dependencies = {}, globals = {}) {
     const code = ts.transpileModule(readFileSync(new URL(path, root), "utf8"), {
@@ -44,7 +46,7 @@ function syncHarness(api, store) {
     const module = load(
         "services/canvas-project-sync.ts",
         {
-            "@/services/ciyuan": api,
+            "@/services/ciyuan": { CiyuanCanvasProjectDeletedError: CanvasProjectDeletedError, ...api },
             "@/stores/canvas/use-canvas-store": { useCanvasStore: store },
         },
         {
@@ -131,6 +133,84 @@ test("a new account can sync while an aborted old upload is still finishing", as
     assert.deepEqual(writes, ["A-first", "B-first"]);
     pending.resolve();
     await turn();
+});
+
+test("cloud deletion beats a newer cached copy while a local-only project still uploads", async () => {
+    const deleted = { id: "deleted-project", updatedAt: "2026-11-20T10:00:00Z" };
+    const local = { id: "local-only", updatedAt: "2026-11-20T10:00:00Z" };
+    const state = { hydrated: true, projects: [deleted, local], deletedProjects: [] };
+    const writes = [];
+    const sync = syncHarness(
+        {
+            fetchServerCanvasProjects: async () => ({ projects: [], deleted_projects: [{ id: deleted.id, deleted_at: 1 }] }),
+            deleteServerCanvasProject: async (id) => writes.push(`DELETE ${id}`),
+            saveServerCanvasProject: async (id) => writes.push(`PUT ${id}`),
+        },
+        { getState: () => state, setState: (patch) => Object.assign(state, patch) },
+    );
+    await sync.pullAndMergeCanvasProjects();
+    assert.deepEqual(Array.from(state.projects), [local]);
+    assert.deepEqual(Array.from(state.deletedProjects, ({ id }) => id), [deleted.id]);
+    sync.start();
+    await turn();
+    assert.deepEqual(writes, ["PUT local-only"]);
+});
+
+test("a delete conflict clears the stale project even when a newer upload is queued", async () => {
+    const pending = deferred();
+    const stale = { id: "deleted-project", updatedAt: "2026-11-20T10:00:00Z" };
+    const edited = { ...stale, updatedAt: "2026-11-20T10:01:00Z" };
+    const state = { hydrated: true, projects: [stale], deletedProjects: [] };
+    const writes = [];
+    const sync = syncHarness(
+        {
+            saveServerCanvasProject: async (id) => {
+                writes.push(id);
+                await pending.promise;
+                throw new CanvasProjectDeletedError();
+            },
+        },
+        { getState: () => state, setState: (patch) => Object.assign(state, patch) },
+    );
+    sync.scheduleCanvasSync([stale], []);
+    sync.start();
+    state.projects = [edited];
+    sync.scheduleCanvasSync([edited], []);
+    pending.resolve();
+    await turn();
+    assert.deepEqual(writes, [stale.id]);
+    assert.equal(state.projects.length, 0);
+    assert.deepEqual(Array.from(state.deletedProjects, ({ id }) => id), [stale.id]);
+});
+
+test("restoring the official template uses a fresh ID and keeps its original deletion", () => {
+    const original = "preset-rooftop-chase-v1";
+    const prefix = "preset-restored-";
+    const { useCanvasStore } = load(
+        "stores/canvas/use-canvas-store.ts",
+        {
+            zustand: { create },
+            "zustand/middleware": { persist },
+            nanoid: { nanoid: () => "test-new-id" },
+            "@/lib/localforage-storage": { localForageStorage: { getItem: async () => null } },
+            "@/lib/canvas/canvas-preset-workflow": {
+                PRESET_WORKFLOW_PROJECT_ID: original,
+                RESTORED_PRESET_PROJECT_PREFIX: prefix,
+                isDefaultPresetProjectId: (id) => id === original || id.startsWith(prefix),
+                createPresetWorkflowProject: (id) => ({ id }),
+            },
+        },
+        { setTimeout: () => 1, clearTimeout: () => {} },
+    );
+    const tombstone = { id: original, deletedAt: "2026-11-20T10:00:00Z" };
+    useCanvasStore.setState({ deletedProjects: [tombstone] });
+    useCanvasStore.getState().replaceProjects([{ id: original }]);
+    useCanvasStore.getState().ensureDefaultPresetProject();
+    assert.equal(useCanvasStore.getState().projects.length, 0);
+    const restored = useCanvasStore.getState().createPresetProject();
+    assert.equal(restored, `${prefix}test-new-id`);
+    assert.equal(useCanvasStore.getState().createPresetProject(), restored);
+    assert.deepEqual(Array.from(useCanvasStore.getState().deletedProjects), [tombstone]);
 });
 
 test("a token refresh that finishes after logout cannot authenticate an old request", async () => {

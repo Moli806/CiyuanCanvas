@@ -724,10 +724,15 @@ function delay(ms: number, signal?: AbortSignal) {
     });
 }
 
+export class CiyuanCanvasProjectDeletedError extends Error {}
+
 async function canvasJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     const response = await sessionRequest(path, init);
     const payload = (await response.json().catch(() => null)) as { success?: boolean; message?: string; data?: T } | null;
     if (response.status === 401 || response.status === 403) throw new CiyuanUnauthorizedError();
+    if (response.status === 410 && init.method === "PUT" && path.startsWith("/api/canvas/projects/")) {
+        throw new CiyuanCanvasProjectDeletedError(readMessage(payload));
+    }
     if (!response.ok || !payload?.success) throw new Error(readMessage(payload) || "请求失败");
     return payload.data as T;
 }
@@ -765,7 +770,7 @@ export function getServerCanvasProject(id: string, signal?: AbortSignal) {
 }
 
 export function fetchServerCanvasProjects(signal?: AbortSignal) {
-    return canvasJson<{ projects: CiyuanServerProject[] }>("/api/canvas/projects", { cache: "no-store", signal });
+    return canvasJson<{ projects: CiyuanServerProject[]; deleted_projects?: { id: string; deleted_at: number }[] }>("/api/canvas/projects", { cache: "no-store", signal });
 }
 
 export function saveServerCanvasProject(id: string, project: unknown, signal?: AbortSignal) {

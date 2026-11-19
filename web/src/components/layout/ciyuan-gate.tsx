@@ -47,11 +47,20 @@ export function CiyuanGate({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         if (status !== "ready") return;
+        const syncDeletions = () => {
+            if (document.visibilityState === "visible") void pullAndMergeCanvasProjects({ deletionsOnly: true }).catch(() => undefined);
+        };
         const timer = window.setInterval(() => {
-            if (document.visibilityState === "visible") void refresh(true);
+            if (document.visibilityState !== "visible") return;
+            void refresh(true);
+            syncDeletions();
         }, 60_000);
-        return () => window.clearInterval(timer);
-    }, [refresh, status]);
+        document.addEventListener("visibilitychange", syncDeletions);
+        return () => {
+            document.removeEventListener("visibilitychange", syncDeletions);
+            window.clearInterval(timer);
+        };
+    }, [refresh, status, userId]);
 
     if (status === "ready") return <>{children}</>;
 

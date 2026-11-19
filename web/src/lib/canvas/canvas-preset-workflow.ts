@@ -5,6 +5,11 @@ import { CanvasNodeType, type CanvasConnection, type CanvasGenerationMode, type 
 import { getGroupResourceNodes } from "./canvas-resource-references";
 
 export const PRESET_WORKFLOW_PROJECT_ID = "preset-rooftop-chase-v1";
+export const RESTORED_PRESET_PROJECT_PREFIX = "preset-restored-";
+
+export function isDefaultPresetProjectId(id: string) {
+    return id === PRESET_WORKFLOW_PROJECT_ID || id.startsWith(RESTORED_PRESET_PROJECT_PREFIX);
+}
 export const PRESET_WORKFLOW_TITLE = "🎬【官方预设】角色三视图到电影短片 · 一键出片";
 export const DEFAULT_PRESET_VIEWPORT = { x: 24, y: 140, k: 0.36 } as const;
 

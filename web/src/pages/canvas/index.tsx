@@ -13,7 +13,7 @@ import type { CanvasExportFile } from "@/types/canvas-export";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useCanvasUiStore } from "@/stores/canvas/use-canvas-ui-store";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
-import { PRESET_ASSETS, PRESET_WORKFLOW_PROJECT_ID } from "@/lib/canvas/canvas-preset-workflow";
+import { isDefaultPresetProjectId, PRESET_ASSETS } from "@/lib/canvas/canvas-preset-workflow";
 import { hasAgentUrlBootstrap } from "@/lib/agent/agent-url-bootstrap";
 
 export default function CanvasPage() {
@@ -31,7 +31,7 @@ export default function CanvasPage() {
     const importProject = useCanvasStore((state) => state.importProject);
     const selectedIds = useCanvasUiStore((state) => state.selectedProjectIds);
     const setDeleteIds = useCanvasUiStore((state) => state.setDeleteProjectIds);
-    const hasDefaultPreset = projects.some((item) => item.id === PRESET_WORKFLOW_PROJECT_ID);
+    const hasDefaultPreset = projects.some((item) => isDefaultPresetProjectId(item.id));
 
     const mode = searchParams.get("mode");
     const agentMode = mode === "new" || mode === "recent" || mode === "choose";
