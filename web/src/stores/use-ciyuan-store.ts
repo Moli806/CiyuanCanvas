@@ -51,7 +51,7 @@ function seedConfig(data: CiyuanBootstrap) {
     const models = modelOptionsFromChannels([channel]);
     const firstOf = (capability: CiyuanCapability) => data.models.find((model) => model.capability === capability)?.id;
     const pick = (capability: CiyuanCapability) => {
-        const id = data.defaults[capability] || firstOf(capability);
+        const id = data.models.find((model) => model.id === data.defaults[capability] && model.capability === capability)?.id || firstOf(capability);
         return id ? encodeChannelModel("ciyuan", id) : "";
     };
     const current = useConfigStore.getState().config;
@@ -67,7 +67,7 @@ function seedConfig(data: CiyuanBootstrap) {
     const video = pickKeeping("video", current.videoModel);
     const text = pickKeeping("text", current.textModel);
     const activeName = modelOptionName(current.model || "");
-    const activeModel = current.model && data.models.some((model) => model.id === activeName) ? current.model : image || video || text;
+    const activeModel = current.model && data.models.some((model) => model.id === activeName) ? encodeChannelModel("ciyuan", activeName) : image || video || text;
 
     useConfigStore.setState({
         config: {

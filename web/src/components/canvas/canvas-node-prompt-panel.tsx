@@ -43,6 +43,8 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const mode = modeOverride ?? defaultMode(node.type);
     const config = buildNodeConfig(globalConfig, node, mode);
+    const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
+    const ready = isAiConfigReady(globalConfig, config.model) && !getCiyuanModel(modelOptionName(config.model))?.video?.spec_required;
     const hasTextContent = node.type === CanvasNodeType.Text && Boolean(node.metadata?.content?.trim());
     const hasImageContent = node.type === CanvasNodeType.Image && Boolean(node.metadata?.content);
     const isEditingExistingContent = hasTextContent || hasImageContent;
@@ -64,7 +66,7 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
     const submit = () => {
         const text = prompt.trim();
         const promptOptional = mode === "video" && Boolean(getCiyuanModel(modelOptionName(config.model))?.video?.prompt_optional);
-        if ((!text && !promptOptional) || isRunning) return;
+        if (!ready || (!text && !promptOptional) || isRunning) return;
         onGenerate(node.id, mode, text);
     };
 
@@ -131,7 +133,7 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
                     type="primary"
                     className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
                     danger={isRunning}
-                    disabled={!isRunning && !prompt.trim() && !(mode === "video" && getCiyuanModel(modelOptionName(config.model))?.video?.prompt_optional)}
+                    disabled={!isRunning && (!ready || (!prompt.trim() && !(mode === "video" && getCiyuanModel(modelOptionName(config.model))?.video?.prompt_optional)))}
                     onClick={() => (isRunning ? onStop(node.id) : submit())}
                     aria-label={t(isRunning ? "canvas.promptPanel.stopGeneration" : "canvas.promptPanel.generate")}
                 >

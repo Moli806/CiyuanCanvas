@@ -4,7 +4,8 @@ import { Button, Segmented } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { ModelPicker } from "@/components/model-picker";
-import { defaultConfig, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, modelOptionName, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { getCiyuanModel } from "@/services/ciyuan";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
@@ -33,7 +34,9 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
     const chipStyle = { background: theme.node.fill, borderColor: theme.node.stroke, color: theme.node.text };
     const hasAnyInput = Boolean(inputSummary.textCount || inputSummary.imageCount || inputSummary.videoCount || inputSummary.audioCount);
     const hasComposerContent = Boolean((node.metadata?.composerContent ?? node.metadata?.prompt ?? "").trim());
-    const canGenerate = hasComposerContent || (mode === "audio" ? inputSummary.textCount > 0 : hasAnyInput);
+    const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
+    const ready = isAiConfigReady(globalConfig, config.model) && !getCiyuanModel(modelOptionName(config.model))?.video?.spec_required;
+    const canGenerate = ready && (hasComposerContent || (mode === "audio" ? inputSummary.textCount > 0 : hasAnyInput));
 
     return (
         <div className="flex h-full w-full cursor-move flex-col px-3 pb-3 pt-7 text-sm" style={{ color: theme.node.text }} onWheel={(event) => event.stopPropagation()}>

@@ -16,6 +16,12 @@ const attemptStore = localforage.createInstance({ name: "infinite-canvas", store
 const ATTEMPT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const ATTEMPT_DROP_AFTER_MS = 10 * 60 * 1000;
 let recoveryVersion = 0;
+const backupLocalWrites = new Set<Promise<unknown>>();
+
+export function trackBackupLocalWrite<T>(write: Promise<T>) {
+    backupLocalWrites.add(write);
+    return write.finally(() => backupLocalWrites.delete(write));
+}
 
 export type ImageAttempt = { id: string; createdAt: number; owner: "workbench" | "auto" };
 
@@ -102,6 +108,7 @@ export async function mirrorGeneratedMedia(blob: Blob, name: string): Promise<st
 /** Logout must not leak one account's canvas data to the next login. */
 export async function clearCanvasLocalData(): Promise<void> {
     recoveryVersion += 1;
+    await Promise.allSettled([...backupLocalWrites]);
     const { useCanvasStore, cancelPendingCanvasPersist } = await import("@/stores/canvas/use-canvas-store");
     const { useAssetStore } = await import("@/stores/use-asset-store");
     const { resetCanvasSyncState } = await import("@/services/canvas-project-sync");

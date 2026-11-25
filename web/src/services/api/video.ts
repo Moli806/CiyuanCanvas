@@ -83,13 +83,13 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
 }
 
 export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
+    if (task.provider === "ciyuan") return pollCiyuanVideoTask(task, options?.signal);
     if (task.provider === "plugin") {
         const result = pluginVideoResults.get(task.id);
         return result ? { status: "completed", result } : { status: "failed", error: apiText("pluginVideoExpired") };
     }
     const requestConfig = resolveModelRequestConfig(config, task.model);
     assertVideoConfig(requestConfig, requestConfig.model);
-    if (task.provider === "ciyuan") return pollCiyuanVideoTask(requestConfig, task, options?.signal);
     if (task.provider === "gemini") return pollGeminiVideoTask(requestConfig, task, options);
     return pollOpenAIVideoTask(requestConfig, task, options);
 }
@@ -138,9 +138,11 @@ function videoPluginResult(result: unknown): VideoGenerationResult {
     throw new Error(apiText("scriptNoVideo"));
 }
 
-export async function storeGeneratedVideo(result: VideoGenerationResult): Promise<UploadedFile> {
+export async function storeGeneratedVideo(result: VideoGenerationResult, signal?: AbortSignal): Promise<UploadedFile> {
+    signal?.throwIfAborted();
     const stored = await storeVideoLocally(result);
-    const serverUrl = await mirrorMedia(stored, result);
+    signal?.throwIfAborted();
+    const serverUrl = await mirrorMedia(stored, result, signal);
     return serverUrl ? { ...stored, serverUrl } : stored;
 }
 
@@ -158,14 +160,14 @@ async function storeVideoLocally(result: VideoGenerationResult): Promise<Uploade
 
 // The generated video must survive the browser closing, so the server keeps a
 // copy next to the canvas reference assets; the IndexedDB blob is only a cache.
-async function mirrorMedia(stored: UploadedFile, result: VideoGenerationResult): Promise<string | undefined> {
+async function mirrorMedia(stored: UploadedFile, result: VideoGenerationResult, signal?: AbortSignal): Promise<string | undefined> {
     try {
-        if (result.blob) return await uploadCanvasAsset(result.blob, "video.mp4", undefined, "generated");
+        if (result.blob) return await uploadCanvasAsset(result.blob, "video.mp4", signal, "generated");
         if (stored.storageKey) {
             const blob = await getMediaBlob(stored.storageKey);
-            if (blob) return await uploadCanvasAsset(blob, "video.mp4", undefined, "generated");
+            if (blob) return await uploadCanvasAsset(blob, "video.mp4", signal, "generated");
         }
-        if (result.url) return await uploadCanvasAsset(result.url, "video.mp4", undefined, "generated");
+        if (result.url) return await uploadCanvasAsset(result.url, "video.mp4", signal, "generated");
     } catch {
         return undefined;
     }
@@ -455,14 +457,14 @@ function delay(ms: number, signal?: AbortSignal) {
             reject(new DOMException("Aborted", "AbortError"));
             return;
         }
-        const timer = setTimeout(resolve, ms);
-        signal?.addEventListener(
-            "abort",
-            () => {
-                clearTimeout(timer);
-                reject(new DOMException("Aborted", "AbortError"));
-            },
-            { once: true },
-        );
+        const onAbort = () => {
+            clearTimeout(timer);
+            reject(new DOMException("Aborted", "AbortError"));
+        };
+        const timer = setTimeout(() => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+        }, ms);
+        signal?.addEventListener("abort", onAbort, { once: true });
     });
 }

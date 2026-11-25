@@ -1,6 +1,5 @@
-import { App, Button, Form, Input, Modal, Progress, Radio, Select, Switch, Tabs } from "antd";
-import type { TFunction } from "i18next";
-import { Cloud, Download, Pencil, Plus, RefreshCw, Trash2, Upload, Wifi } from "lucide-react";
+import { App, Button, Form, Input, Modal, Radio, Select, Switch, Tabs } from "antd";
+import { Download, Pencil, Plus, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -10,10 +9,9 @@ import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
 import { ConfigLocalProxy } from "@/components/layout/config-local-proxy";
 import { ConfigPromptSources } from "@/components/layout/config-prompt-sources";
 import { ConfigLocalStorage } from "@/components/layout/config-local-storage";
-import type { AppLocale } from "@/i18n";
+import { PersonalWebdav } from "@/pages/config/personal-webdav";
+import { useCiyuanStore } from "@/stores/use-ciyuan-store";
 import { exportAppConfig, importAppConfig } from "@/services/config-file";
-import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
-import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
 import { computeMediaSize, inferMediaRatio, inferMediaScale, mediaScaleOptions, parseVideoResolution } from "@/lib/media-size";
 import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
@@ -24,13 +22,6 @@ type ModelGroup = {
     labelKey: string;
 };
 
-type WebdavDomainProgress = {
-    stage: string;
-    current?: number;
-    total?: number;
-    status?: "active" | "success" | "exception";
-};
-
 const modelGroups: ModelGroup[] = [
     { capability: "image", modelKey: "imageModel", labelKey: "config.preferences.defaultImageModel" },
     { capability: "video", modelKey: "videoModel", labelKey: "config.preferences.defaultVideoModel" },
@@ -38,37 +29,19 @@ const modelGroups: ModelGroup[] = [
     { capability: "audio", modelKey: "audioModel", labelKey: "config.preferences.defaultAudioModel" },
 ];
 
-const webdavDomainKeys: AppSyncDomainKey[] = ["canvas", "assets", "image-workbench", "video-workbench"];
-function createWebdavDomainProgress(): Record<AppSyncDomainKey, WebdavDomainProgress> {
-    return webdavDomainKeys.reduce(
-        (progress, key) => ({
-            ...progress,
-            [key]: { stage: "等待同步" },
-        }),
-        {} as Record<AppSyncDomainKey, WebdavDomainProgress>,
-    );
-}
-
 export function AppConfigPanel({ showDoneButton = false, initialTab = "channels" }: { showDoneButton?: boolean; initialTab?: ConfigTabKey }) {
     const { message } = App.useApp();
-    const { i18n, t } = useTranslation();
+    const { t } = useTranslation();
     const configInputRef = useRef<HTMLInputElement>(null);
     const [activeTab, setActiveTab] = useState<ConfigTabKey>(initialTab);
     const [editingChannelId, setEditingChannelId] = useState("");
-    const [testingWebdav, setTestingWebdav] = useState(false);
-    const [syncingWebdav, setSyncingWebdav] = useState(false);
-    const [webdavSyncStatus, setWebdavSyncStatus] = useState("");
-    const [webdavDomainProgress, setWebdavDomainProgress] = useState(createWebdavDomainProgress);
+    const owner = useCiyuanStore((state) => state.user?.id);
     const config = useConfigStore((state) => state.config);
-    const webdav = useConfigStore((state) => state.webdav);
     const updateConfig = useConfigStore((state) => state.updateConfig);
-    const updateWebdavConfig = useConfigStore((state) => state.updateWebdavConfig);
     const shouldPromptContinue = useConfigStore((state) => state.shouldPromptContinue);
     const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
     const clearPromptContinue = useConfigStore((state) => state.clearPromptContinue);
-    const webdavReady = Boolean(webdav.url.trim());
     const editingChannel = config.channels.find((channel) => channel.id === editingChannelId) || null;
-    const locale = i18n.resolvedLanguage as AppLocale;
     const imageResolutionOptions = mediaScaleOptions.map((value) => ({ value, label: value === "auto" ? t("settingsPanels.common.auto") : value.toUpperCase() }));
     useEffect(() => setActiveTab(initialTab), [initialTab]);
 
@@ -113,56 +86,6 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
 
     const saveChannel = (channel: ModelChannel) => {
         updateChannels(config.channels.map((item) => (item.id === channel.id ? channel : item)));
-    };
-
-    const testWebdav = async () => {
-        if (!webdavReady) {
-            message.error(t("config.webdav.missingUrl"));
-            return;
-        }
-        setTestingWebdav(true);
-        try {
-            await testWebdavConnection(webdav);
-            message.success(t("config.webdav.available"));
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : t("config.webdav.testFailed"));
-        } finally {
-            setTestingWebdav(false);
-        }
-    };
-
-    const updateWebdavProgress = (event: AppSyncProgressEvent) => {
-        setWebdavSyncStatus(event.stage);
-        if (!event.domain) return;
-        setWebdavDomainProgress((current) => ({
-            ...current,
-            [event.domain as AppSyncDomainKey]: {
-                stage: event.stage,
-                current: event.current,
-                total: event.total,
-                status: event.status,
-            },
-        }));
-    };
-
-    const syncWebdav = async () => {
-        if (!webdavReady) {
-            message.error(t("config.webdav.missingUrl"));
-            return;
-        }
-        setSyncingWebdav(true);
-        setWebdavDomainProgress(createWebdavDomainProgress());
-        setWebdavSyncStatus(t("config.webdav.preparing"));
-        try {
-            const result = await syncAppDataToWebdav(webdav, updateWebdavProgress);
-            updateWebdavConfig("lastSyncedAt", result.syncedAt);
-            message.success(t("config.webdav.completed", { projects: result.projects, assets: result.assets, records: result.imageLogs + result.videoLogs, files: result.uploadedFiles, bytes: formatBytes(result.uploadedBytes) }));
-        } catch (error) {
-            setWebdavSyncStatus(error instanceof Error ? error.message : t("config.webdav.failed"));
-            message.error(error instanceof Error ? error.message : t("config.webdav.failed"));
-        } finally {
-            setSyncingWebdav(false);
-        }
     };
 
     return (
@@ -304,46 +227,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                     {
                         key: "webdav",
                         label: "WebDAV",
-                        children: (
-                            <Form layout="vertical" requiredMark={false}>
-                                <section className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
-                                    <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                                        <div>
-                                            <div className="flex items-center gap-2 text-sm font-semibold">
-                                                <Cloud className="size-4" />
-                                                {t("config.webdav.title")}
-                                            </div>
-                                            <div className="mt-1 text-xs text-stone-500">{t("config.webdav.description")}</div>
-                                        </div>
-                                        <div className="text-xs text-stone-500">{webdav.lastSyncedAt ? t("config.webdav.lastSynced", { time: formatWebdavTime(webdav.lastSyncedAt, locale) }) : t("config.webdav.neverSynced")}</div>
-                                    </div>
-                                    <div className="grid gap-4 md:grid-cols-2">
-                                        <Form.Item label={t("config.webdav.url")} className="mb-4">
-                                            <Input value={webdav.url} placeholder="https://nas.example.com/webdav" onChange={(event) => updateWebdavConfig("url", event.target.value)} />
-                                        </Form.Item>
-                                        <Form.Item label={t("config.webdav.directory")} extra={t("config.webdav.directoryDescription", { manifest: WEBDAV_MANIFEST_FILE_NAME })} className="mb-4">
-                                            <Input value={webdav.directory} placeholder="infinite-canvas" onChange={(event) => updateWebdavConfig("directory", event.target.value)} />
-                                        </Form.Item>
-                                        <Form.Item label={t("config.webdav.username")} className="mb-0">
-                                            <Input value={webdav.username} autoComplete="username" onChange={(event) => updateWebdavConfig("username", event.target.value)} />
-                                        </Form.Item>
-                                        <Form.Item label={t("config.webdav.password")} className="mb-0">
-                                            <Input.Password value={webdav.password} autoComplete="current-password" onChange={(event) => updateWebdavConfig("password", event.target.value)} />
-                                        </Form.Item>
-                                    </div>
-                                    <div className="mt-4 flex flex-wrap items-center gap-2">
-                                        <Button icon={<Wifi className="size-4" />} disabled={!webdavReady || syncingWebdav} loading={testingWebdav} onClick={() => void testWebdav()}>
-                                            {t("config.webdav.test")}
-                                        </Button>
-                                        <Button type="primary" icon={<RefreshCw className="size-4" />} disabled={!webdavReady || testingWebdav} loading={syncingWebdav} onClick={() => void syncWebdav()}>
-                                            {t(syncingWebdav ? "config.webdav.syncing" : "config.webdav.syncNow")}
-                                        </Button>
-                                        {webdavSyncStatus ? <span className="text-xs text-stone-500">{syncStageLabel(webdavSyncStatus, t)}</span> : null}
-                                    </div>
-                                    {syncingWebdav || webdavSyncStatus ? <WebdavProgressGrid progress={webdavDomainProgress} t={t} /> : null}
-                                </section>
-                            </Form>
-                        ),
+                        children: owner ? <PersonalWebdav key={owner} owner={owner} /> : null,
                     },
                     {
                         key: "local-storage",
@@ -420,83 +304,4 @@ function normalizeImageCount(value: string) {
 function apiFormatLabel(apiFormat: ApiCallFormat) {
     if (apiFormat === "gemini") return "Gemini";
     return "OpenAI";
-}
-
-function formatWebdavTime(value: string, locale: AppLocale) {
-    return new Date(value).toLocaleString(locale, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
-}
-
-function WebdavProgressGrid({ progress, t }: { progress: Record<AppSyncDomainKey, WebdavDomainProgress>; t: TFunction }) {
-    return (
-        <div className="mt-3 grid gap-2">
-            {webdavDomainKeys.map((key) => {
-                const item = progress[key];
-                const count = item.total ? `${item.current || 0}/${item.total}` : "";
-                return (
-                    <div key={key} className="rounded-md border border-stone-200 px-3 py-2 dark:border-stone-800">
-                        <div className="mb-1 flex min-w-0 items-center justify-between gap-3 text-xs">
-                            <span className="shrink-0 font-medium text-stone-700 dark:text-stone-200">{t(`config.webdav.domains.${domainTranslationKey(key)}`)}</span>
-                            <span className="min-w-0 truncate text-right text-stone-500">
-                                {syncStageLabel(item.stage, t)}
-                                {count ? ` · ${count}` : ""}
-                            </span>
-                        </div>
-                        <Progress percent={getWebdavProgressPercent(item)} size="small" status={getWebdavProgressStatus(item)} showInfo={false} />
-                    </div>
-                );
-            })}
-        </div>
-    );
-}
-
-function domainTranslationKey(domain: AppSyncDomainKey) {
-    if (domain === "image-workbench") return "imageWorkbench";
-    if (domain === "video-workbench") return "videoWorkbench";
-    return domain;
-}
-
-function syncStageLabel(stage: string, t: TFunction) {
-    if (stage === "等待本地数据加载") return t("config.webdav.stages.localWaiting");
-    if (stage === "同步完成") return t("config.webdav.stages.syncComplete");
-    if (stage === "等待同步") return t("config.webdav.stages.waiting");
-    if (stage === "读取远端清单") return t("config.webdav.stages.remoteManifest");
-    if (stage === "读取本地数据") return t("config.webdav.stages.localData");
-    if (stage === "下载缺失媒体") return t("config.webdav.stages.downloadMedia");
-    if (stage === "写入本地合并结果") return t("config.webdav.stages.writeMerge");
-    if (stage === "上传新增媒体") return t("config.webdav.stages.uploadMedia");
-    if (stage === "媒体已齐全") return t("config.webdav.stages.mediaReady");
-    if (stage === "媒体无需上传") return t("config.webdav.stages.mediaSkipped");
-    if (stage === "检查缺失媒体") return t("config.webdav.stages.checkMissingMedia");
-    if (stage === "下载媒体") return t("config.webdav.stages.downloadMediaFile");
-    if (stage === "检查本地媒体") return t("config.webdav.stages.checkLocalMedia");
-    if (stage.startsWith("上传媒体 ")) return t("config.webdav.stages.uploadMediaFile", { size: stage.slice(5) });
-    if (stage === "完成") return t("config.webdav.stages.complete");
-    if (stage.startsWith("上传清单 ")) return t("config.webdav.stages.uploadManifest", { size: stage.slice(5) });
-    return stage;
-}
-
-function getWebdavProgressPercent(item: WebdavDomainProgress) {
-    if (item.status === "success") return 100;
-    if (item.total) return Math.min(100, Math.round(((item.current || 0) / item.total) * 100));
-    if (item.status === "exception") return 100;
-    if (item.stage === "等待同步") return 0;
-    if (item.stage === "读取远端清单") return 12;
-    if (item.stage === "读取本地数据") return 24;
-    if (item.stage === "下载缺失媒体") return 36;
-    if (item.stage === "写入本地合并结果") return 58;
-    if (item.stage === "上传新增媒体") return 66;
-    if (item.stage === "媒体已齐全" || item.stage === "媒体无需上传") return 74;
-    if (item.stage.startsWith("上传清单")) return 90;
-    return item.status === "active" ? 30 : 0;
-}
-
-function getWebdavProgressStatus(item: WebdavDomainProgress): "normal" | "active" | "success" | "exception" {
-    if (item.status === "success" || item.status === "exception") return item.status;
-    return item.status === "active" ? "active" : "normal";
-}
-
-function formatBytes(bytes: number) {
-    if (bytes < 1024) return `${bytes}B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-    return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
 }

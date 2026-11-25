@@ -3,7 +3,7 @@ import axios from "axios";
 import i18n from "@/i18n";
 import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
-import { ciyuanAxios, ciyuanSessionFetch, requestCiyuanBananaImages, requestCiyuanChatQuestion, uploadCanvasAsset, type CiyuanChatMessage } from "@/services/ciyuan";
+import { ciyuanAxios, ciyuanSessionFetch, getCiyuanModel, imageTransport, requestCiyuanMediaImages, requestCiyuanChatQuestion, uploadCanvasAsset, type CiyuanChatMessage } from "@/services/ciyuan";
 import { beginImageAttempt, finishImageAttempt, resolveAttemptAssets } from "@/services/image-attempts";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
@@ -734,6 +734,25 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
     return images;
 }
 
+function openAIImageParams(config: AiConfig, count: number) {
+    const spec = getCiyuanModel(config.model)?.image;
+    const params: Record<string, string | number> = {};
+    if (!spec || (spec.max_count ?? 1) > 1) params.n = Math.min(count, spec?.max_count ?? count);
+    const quality = normalizeQuality(config.quality);
+    if (quality && (!spec || spec.qualities?.includes(quality))) params.quality = quality;
+    if (!spec || spec.ratios?.length || spec.resolutions?.length) {
+        const size = resolveRequestSize(config.size);
+        if (size) params.size = size;
+    }
+    const background = normalizeBackground(config.background);
+    if (background && (!spec || spec.supports_background)) params.background = background;
+    if (/^gpt-image-2\.[56]-(flare|sunburst)$/.test(config.model) || config.model === "grok-imagine-image-2.0") {
+        params.output_format = IMAGE_OUTPUT_FORMAT;
+        if (config.model === "grok-imagine-image-2.0") params.response_format = "b64_json";
+    }
+    return params;
+}
+
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions): Promise<GeneratedImageItem[]> {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
@@ -757,9 +776,9 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
     }
-    if (requestConfig.apiFormat === "ciyuan" && requestConfig.model === "banana-2.1") {
+    if (requestConfig.apiFormat === "ciyuan" && imageTransport(requestConfig.model) === "media-task") {
         try {
-            return await requestCiyuanBananaImages(requestConfig, withSystemPrompt(requestConfig, prompt), [], n, options?.signal);
+            return await requestCiyuanMediaImages(requestConfig, withSystemPrompt(requestConfig, prompt), [], n, options?.signal);
         } catch (error) {
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
@@ -771,19 +790,10 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
     }
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(config.size);
-    const background = normalizeBackground(config.background);
     const body = {
         model: requestConfig.model,
         prompt: withSystemPrompt(requestConfig, prompt),
-        n,
-        ...(quality ? { quality } : {}),
-        ...(requestSize ? { size: requestSize } : {}),
-        ...(background ? { background } : {}),
-        // gpt-image models reject response_format; they always return b64.
-        ...(/gpt-image/.test(requestConfig.model) ? {} : { response_format: "b64_json" }),
-        output_format: IMAGE_OUTPUT_FORMAT,
+        ...openAIImageParams(requestConfig, n),
     };
     const attempt = requestConfig.apiFormat === "ciyuan" ? (options?.requestId ? { id: options.requestId } : await beginImageAttempt()) : null;
     try {
@@ -811,6 +821,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
 
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<GeneratedImageItem[]> {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
+    if (getCiyuanModel(requestConfig.model)?.image?.supports_edit === false) throw new Error(i18n.t("workbench.imageEditUnavailable"));
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const requestPrompt = buildImageReferencePromptText(prompt, references);
     const script = resolveModelScript(config, config.model || config.imageModel);
@@ -834,9 +845,9 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
     }
-    if (requestConfig.apiFormat === "ciyuan" && requestConfig.model === "banana-2.1") {
+    if (requestConfig.apiFormat === "ciyuan" && imageTransport(requestConfig.model) === "media-task") {
         try {
-            return await requestCiyuanBananaImages(requestConfig, withSystemPrompt(requestConfig, requestPrompt), references, n, options?.signal);
+            return await requestCiyuanMediaImages(requestConfig, withSystemPrompt(requestConfig, requestPrompt), references, n, options?.signal);
         } catch (error) {
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
@@ -849,27 +860,10 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         }
     }
 
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(config.size);
-    const background = normalizeBackground(config.background);
     const formData = new FormData();
     formData.set("model", requestConfig.model);
     formData.set("prompt", withSystemPrompt(requestConfig, requestPrompt));
-    formData.set("n", String(n));
-    // gpt-image models reject response_format; they always return b64.
-    if (!/gpt-image/.test(requestConfig.model)) {
-        formData.set("response_format", "b64_json");
-    }
-    formData.set("output_format", IMAGE_OUTPUT_FORMAT);
-    if (quality) {
-        formData.set("quality", quality);
-    }
-    if (requestSize) {
-        formData.set("size", requestSize);
-    }
-    if (background) {
-        formData.set("background", background);
-    }
+    for (const [key, value] of Object.entries(openAIImageParams(requestConfig, n))) formData.set(key, String(value));
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     const imageField = files.length > 1 ? "image[]" : "image";
     files.forEach((file) => formData.append(imageField, file));

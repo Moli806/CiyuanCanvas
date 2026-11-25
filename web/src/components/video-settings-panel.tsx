@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import i18n from "@/i18n";
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
-import { getCiyuanModel } from "@/services/ciyuan";
+import { getCiyuanModel, usesSourceVideoDuration } from "@/services/ciyuan";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import { clampVideoSeconds, computeVideoSize, inferVideoRatio, parseVideoResolution, readVideoDimensions, VIDEO_SECONDS_MAX, VIDEO_SECONDS_MIN, videoRatioOptions } from "@/lib/media-size";
 import { modelOptionName, type AiConfig } from "@/stores/use-config-store";
@@ -36,8 +36,8 @@ export function VideoSettingsPanel({ config, model: modelOverride, onConfigChang
     const { t } = useTranslation();
     const modelName = modelOptionName(modelOverride || config.model || config.videoModel);
     const spec = getCiyuanModel(modelName)?.video;
-    const resolutionItems = spec?.resolutions?.length
-        ? Array.from(new Map(spec.resolutions.map((item) => [item.replace(/p$/i, ""), { value: item.replace(/p$/i, ""), label: item }])).values())
+    const resolutionItems = spec
+        ? Array.from(new Map((spec.resolutions ?? []).map((item) => [item.replace(/p$/i, ""), { value: item.replace(/p$/i, ""), label: item }])).values())
         : resolutionOptions;
     const ratioItems = spec ? (spec.aspect_ratios?.length ? videoRatioOptions.filter((item) => spec.aspect_ratios!.includes(item.value)) : []) : videoRatioOptions;
     const modeItems = spec && !spec.frames ? videoModeOptions.filter((item) => item.value === "reference") : videoModeOptions;
@@ -45,7 +45,7 @@ export function VideoSettingsPanel({ config, model: modelOverride, onConfigChang
     const videoMode = normalizeVideoModeValue(config.videoMode);
     const isOminiFrames = /^omini-/i.test(modelName) && Boolean(spec?.frames) && videoMode === "frames";
     const maxSeconds = isOminiFrames ? Math.min(10, spec?.max_seconds ?? VIDEO_SECONDS_MAX) : (spec?.max_seconds ?? VIDEO_SECONDS_MAX);
-    const allowDecimalSeconds = Boolean(spec?.prompt_optional);
+    const allowDecimalSeconds = usesSourceVideoDuration(spec);
     const seconds = Number(clampVideoSeconds(config.videoSeconds || "6", minSeconds, maxSeconds, allowDecimalSeconds));
     const resolution = parseVideoResolution(config.vquality);
     const selectedRatio = inferVideoRatio(config.size || "auto");
@@ -60,9 +60,9 @@ export function VideoSettingsPanel({ config, model: modelOverride, onConfigChang
     };
 
     useEffect(() => {
-        if (!spec) return;
+        if (!spec || spec.prompt_only || spec.spec_required) return;
         const effectiveMax = isOminiFrames ? Math.min(10, spec.max_seconds) : spec.max_seconds;
-        const rawSeconds = Number(clampVideoSeconds(config.videoSeconds || "6", spec.min_seconds, effectiveMax, Boolean(spec.prompt_optional)));
+        const rawSeconds = Number(clampVideoSeconds(config.videoSeconds || "6", spec.min_seconds, effectiveMax, usesSourceVideoDuration(spec)));
         const nextSeconds = Math.min(effectiveMax, Math.max(spec.min_seconds, rawSeconds));
         if (String(nextSeconds) !== String(config.videoSeconds || "6")) onConfigChange("videoSeconds", String(nextSeconds));
         if (spec.resolutions.length && !spec.resolutions.some((value) => value.replace(/p$/i, "") === resolution)) {
@@ -74,11 +74,14 @@ export function VideoSettingsPanel({ config, model: modelOverride, onConfigChang
         }
     }, [spec, isOminiFrames, config.videoSeconds, config.vquality, config.size, config.videoMode, onConfigChange, resolution, selectedRatio, videoMode]);
 
+    if (spec?.spec_required) return <p role="status" className="text-sm text-muted-foreground">{t("workbench.specRequired")}</p>;
+    if (spec?.prompt_only) return <p className="text-sm text-muted-foreground">{t("workbench.modelDefaults")}</p>;
+
     return (
         <ImageSettingsTheme theme={theme}>
             <div className={className} style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()}>
                 {showTitle ? <div className="text-lg font-semibold">{t("settingsPanels.video.title")}</div> : null}
-                <SettingGroup title={t("settingsPanels.video.quality")} color={theme.node.muted}>
+                {resolutionItems.length > 0 && <SettingGroup title={t("settingsPanels.video.quality")} color={theme.node.muted}>
                     <div className="grid grid-cols-4 gap-2.5">
                         {resolutionItems.map((item) => (
                             <OptionPill key={item.value} selected={resolution === item.value} theme={theme} onClick={() => selectResolution(item.value)}>
@@ -87,7 +90,7 @@ export function VideoSettingsPanel({ config, model: modelOverride, onConfigChang
                         ))}
                         {spec ? null : <ResolutionInput value={resolution} theme={theme} onChange={selectResolution} />}
                     </div>
-                </SettingGroup>
+                </SettingGroup>}
                 {spec ? (
                     ratioItems.length ? (
                         <SettingGroup title={t("settingsPanels.video.ratio")} color={theme.node.muted}>
@@ -143,11 +146,11 @@ export function VideoSettingsPanel({ config, model: modelOverride, onConfigChang
                     </>
                 )}
                 <SettingGroup title={t("settingsPanels.video.seconds")} color={theme.node.muted}>
-                    <div className="flex items-center gap-3" onMouseDown={(event) => event.stopPropagation()}>
+                    {allowDecimalSeconds ? <span className="text-sm">{t("workbench.sourceVideoDuration")}</span> : <div className="flex items-center gap-3" onMouseDown={(event) => event.stopPropagation()}>
                         <Slider className="min-w-0 flex-1" min={minSeconds} max={maxSeconds} step={allowDecimalSeconds ? 0.01 : 1} value={seconds} onChange={(value) => onConfigChange("videoSeconds", String(Array.isArray(value) ? value[0] : value))} />
                         <SecondsInput value={seconds} min={minSeconds} max={maxSeconds} allowDecimal={allowDecimalSeconds} theme={theme} onCommit={(value) => onConfigChange("videoSeconds", String(value))} />
                         <span className="shrink-0 text-sm" style={{ color: theme.node.muted }}>s</span>
-                    </div>
+                    </div>}
                 </SettingGroup>
                 <SettingGroup title={t("settingsPanels.video.mode")} color={theme.node.muted}>
                     <div className={modeItems.length > 1 ? "grid grid-cols-2 gap-2.5" : "grid grid-cols-1 gap-2.5"}>

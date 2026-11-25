@@ -14,6 +14,7 @@ export type CanvasProject = {
     title: string;
     createdAt: string;
     updatedAt: string;
+    cloud?: { revision: number; updatedAt: string };
     nodes: CanvasNodeData[];
     connections: CanvasConnection[];
     chatSessions: CanvasAssistantSession[];
@@ -48,6 +49,21 @@ const CANVAS_STORE_KEY = "infinite-canvas:canvas_store";
 type PersistedCanvasState = Pick<CanvasStore, "projects" | "deletedProjects">;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let queuedPersistState: PersistedCanvasState | null = null;
+let pendingPersist: { name: string; value: StorageValue<CanvasStore> } | null = null;
+
+export async function flushPendingCanvasPersist() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = null;
+    const pending = pendingPersist;
+    pendingPersist = null;
+    if (!pending) return;
+    const { projects, deletedProjects } = pending.value.state;
+    scheduleCanvasSync(
+        projects,
+        deletedProjects.map(({ id }) => id),
+    );
+    await localForageStorage.setItem(pending.name, JSON.stringify(pending.value));
+}
 
 const canvasStorage: PersistStorage<CanvasStore> = {
     getItem: async (name) => {
@@ -62,14 +78,8 @@ const canvasStorage: PersistStorage<CanvasStore> = {
         if (queuedPersistState && queuedPersistState.projects === nextState.projects && queuedPersistState.deletedProjects === nextState.deletedProjects) return;
         queuedPersistState = nextState;
         if (saveTimer) clearTimeout(saveTimer);
-        saveTimer = setTimeout(() => {
-            saveTimer = null;
-            void localForageStorage.setItem(name, JSON.stringify(value));
-            scheduleCanvasSync(
-                nextState.projects,
-                nextState.deletedProjects.map((item) => item.id),
-            );
-        }, 400);
+        pendingPersist = { name, value };
+        saveTimer = setTimeout(() => void flushPendingCanvasPersist(), 400);
     },
     removeItem: (name) => localForageStorage.removeItem(name),
 };
@@ -80,6 +90,7 @@ export function cancelPendingCanvasPersist() {
         clearTimeout(saveTimer);
         saveTimer = null;
     }
+    pendingPersist = null;
     queuedPersistState = null;
 }
 

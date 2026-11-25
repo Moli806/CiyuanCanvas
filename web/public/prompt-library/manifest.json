@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "registryCommit": "e9b9473cfeb32b75109a486b9915b151558dfc5b",
+  "generatedAt": "2026-11-24T13:36:41+00:00",
+  "total": 1747,
+  "sources": [
+    {
+      "id": "banana-prompt-quicker",
+      "name": "Banana Prompt Quicker",
+      "homepage": "https://glidea.github.io/banana-prompt-quicker/",
+      "count": 323,
+      "sha256": "0ae590d56820d1d9716691e96410ee6869dec28a7261de397f74ad2f6cbedda5",
+      "nativeUrl": "https://raw.githubusercontent.com/yukkcat/image-prompts/e9b9473cfeb32b75109a486b9915b151558dfc5b/dist/sources/banana-prompt-quicker.json",
+      "sourceMode": "remote"
+    },
+    {
+      "id": "davidwu-gpt-image2-prompts",
+      "name": "DavidWu GPT Image 2 Prompts",
+      "homepage": "https://github.com/davidwuw0811-boop/awesome-gpt-image2-prompts",
+      "count": 494,
+      "sha256": "bc61473b87e53acd514d14e1936f3490fe7d9db3cf004d5730dda9f28cda1dbf",
+      "nativeUrl": "https://raw.githubusercontent.com/yukkcat/image-prompts/e9b9473cfeb32b75109a486b9915b151558dfc5b/dist/sources/davidwu-gpt-image2-prompts.json",
+      "sourceMode": "remote"
+    },
+    {
+      "id": "freestylefly-gpt-image-2",
+      "name": "Freestylefly GPT Image 2",
+      "homepage": "https://github.com/freestylefly/awesome-gpt-image-2",
+      "count": 546,
+      "sha256": "304e0b658561e5a581f76b982e7bbbbadaa3f8f36f2d62156318082ee3d69b24",
+      "nativeUrl": "https://raw.githubusercontent.com/yukkcat/image-prompts/e9b9473cfeb32b75109a486b9915b151558dfc5b/dist/sources/freestylefly-gpt-image-2.json",
+      "sourceMode": "remote"
+    },
+    {
+      "id": "awesome-gpt-image",
+      "name": "Awesome GPT Image",
+      "homepage": "https://github.com/ZeroLu/awesome-gpt-image",
+      "count": 53,
+      "sha256": "e5508cad635279cd2c9ddda70d422ad9de8700e7e349e463f2fe433e562a99ec",
+      "nativeUrl": "https://raw.githubusercontent.com/yukkcat/image-prompts/e9b9473cfeb32b75109a486b9915b151558dfc5b/dist/sources/awesome-gpt-image.json",
+      "sourceMode": "remote"
+    },
+    {
+      "id": "awesome-gpt4o-image-prompts",
+      "name": "Awesome GPT-4o Image Prompts",
+      "homepage": "https://github.com/ImgEdify/Awesome-GPT4o-Image-Prompts",
+      "count": 76,
+      "sha256": "ece926584179496d426bd9703c0ea30a13b89a9ce0101bb340056d049e58979d",
+      "nativeUrl": "https://raw.githubusercontent.com/yukkcat/image-prompts/e9b9473cfeb32b75109a486b9915b151558dfc5b/dist/sources/awesome-gpt4o-image-prompts.json",
+      "sourceMode": "local",
+      "license": "MIT",
+      "licenseUrl": "https://github.com/ImgEdify/Awesome-GPT4o-Image-Prompts/blob/d45df616410164a464990081ca0050dd293913c2/LICENSE",
+      "licenseFile": "LICENSE-ImgEdify.txt"
+    },
+    {
+      "id": "youmind-gpt-image-2",
+      "name": "YouMind GPT Image 2",
+      "homepage": "https://github.com/YouMind-OpenLab/awesome-gpt-image-2",
+      "count": 126,
+      "sha256": "d68de9e63c460bb2ed4eefa8c34fb7ec9055f777a6d3f242ce946191aeb505af",
+      "nativeUrl": "https://raw.githubusercontent.com/yukkcat/image-prompts/e9b9473cfeb32b75109a486b9915b151558dfc5b/dist/sources/youmind-gpt-image-2.json",
+      "sourceMode": "remote"
+    },
+    {
+      "id": "youmind-nano-banana-pro",
+      "name": "YouMind Nano Banana Pro",
+      "homepage": "https://github.com/YouMind-OpenLab/awesome-nano-banana-pro-prompts",
+      "count": 129,
+      "sha256": "fcf8a4a6da75f0dcf99a5c10c3547f7802f0c975b0e445a023a2ac4967466091",
+      "nativeUrl": "https://raw.githubusercontent.com/yukkcat/image-prompts/e9b9473cfeb32b75109a486b9915b151558dfc5b/dist/sources/youmind-nano-banana-pro.json",
+      "sourceMode": "remote"
+    }
+  ]
+}

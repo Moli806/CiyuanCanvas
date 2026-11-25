@@ -54,6 +54,7 @@ export function CiyuanUserActions({ variant = "default", showPreferences = true 
             disabled: true,
             label: (
                 <div className="min-w-44 py-1">
+                    <div className="mb-1 max-w-56 wrap-anywhere text-sm font-medium sm:hidden">{displayName}</div>
                     <div className="text-xs text-stone-500">{t("ciyuan.balance")}</div>
                     <div className="mt-1 text-base font-semibold">{formatBalance(balance, t("ciyuan.balanceUnit"))}</div>
                 </div>
@@ -124,13 +125,14 @@ export function CiyuanUserActions({ variant = "default", showPreferences = true 
                 <Button
                     size="small"
                     type="text"
+                    aria-label={displayName}
                     className="!h-8 !max-w-[240px] !justify-start !rounded-full !px-2.5"
                     style={{ background: variant === "canvas" ? canvasTheme.node.fill : undefined, color: variant === "canvas" ? canvasTheme.node.text : undefined }}
                 >
                     <span className="inline-flex min-w-0 items-center gap-1.5">
                         <UserRound className="size-3.5 shrink-0" />
-                        <span className="max-w-[110px] truncate">{displayName}</span>
-                        <span className="shrink-0 text-[11px] opacity-70">{formatBalance(balance, t("ciyuan.balanceUnit"))}</span>
+                        <span className="hidden max-w-[110px] truncate sm:inline">{displayName}</span>
+                        <span className="hidden shrink-0 text-[11px] opacity-70 sm:inline">{formatBalance(balance, t("ciyuan.balanceUnit"))}</span>
                     </span>
                 </Button>
             </Dropdown>

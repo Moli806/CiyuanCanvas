@@ -95,10 +95,12 @@ function emptyModelLabel(capability?: ModelCapability) {
 }
 
 function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
+    const { t } = useTranslation();
     return (
         <span className="flex min-w-0 items-center gap-2">
             <ModelIcon model={model} />
             <span className="truncate">{modelOptionLabel(config, model)}</span>
+            {getCiyuanModel(modelOptionName(model))?.video?.spec_required ? <span className="text-xs text-muted-foreground">{t("workbench.specRequired")}</span> : null}
         </span>
     );
 }

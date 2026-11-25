@@ -4,7 +4,6 @@ import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Tag, Tooltip
 import localforage from "localforage";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
 
 import { ImageSettingsPanel } from "@/components/image-settings-panel";
 import { ModelPicker } from "@/components/model-picker";
@@ -12,11 +11,12 @@ import { PromptOptimizerDialog } from "@/components/prompt-optimizer-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
-import { matchWorkbenchModelOption, resolveWorkbenchHandoff } from "@/lib/workbench-handoff";
+import { useWorkbenchModel } from "@/hooks/use-workbench-model";
+import { getCiyuanModel, imageTransport } from "@/services/ciyuan";
 import { stageGeneratedImage } from "@/services/generated-image";
 import { beginImageAttempt, finishImageAttempt } from "@/services/image-attempts";
 import { fetchCanvasImageResult } from "@/services/ciyuan";
-import { modelOptionLabel, modelOptionName, selectableModelsByCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { modelOptionLabel, modelOptionName, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useCiyuanStore } from "@/stores/use-ciyuan-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
@@ -80,11 +80,9 @@ const settlingLogIds = new Set<string>();
 export default function ImagePage() {
     const { message } = App.useApp();
     const { t } = useTranslation();
-    const [searchParams, setSearchParams] = useSearchParams();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragDepthRef = useRef(0);
-    const appliedHandoffSearchRef = useRef("");
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
@@ -113,9 +111,18 @@ export default function ImagePage() {
     const processedCommandRef = useRef(0);
     const agentTaskIdRef = useRef<string | undefined>(undefined);
 
-    const model = effectiveConfig.imageModel || effectiveConfig.model;
-    const canGenerate = Boolean(prompt.trim());
-    const generationCount = Math.max(1, Math.min(10, Number(config.count) || 1));
+    const { model, unavailableModel, selectModel } = useWorkbenchModel("image", (value) => {
+        setPrompt(value);
+        if (!running) {
+            setPreviewLog(null);
+            setResults([]);
+            setReferences([]);
+        }
+    });
+    const imageSpec = getCiyuanModel(modelOptionName(model))?.image;
+    const supportsEdit = imageSpec?.supports_edit !== false;
+    const canGenerate = Boolean(prompt.trim() && model && isAiConfigReady(effectiveConfig, model) && (supportsEdit || !references.length));
+    const generationCount = Math.max(1, Math.min(10, imageSpec?.max_count ?? 10, Number(config.count) || 1));
     const recoveredImages = useCiyuanStore((state) => state.recoveredImages);
 
     useEffect(() => {
@@ -134,33 +141,8 @@ export default function ImagePage() {
         void refreshLogs(true);
     }, []);
 
-    useEffect(() => {
-        const rawSearch = searchParams.toString();
-        if (!rawSearch || appliedHandoffSearchRef.current === rawSearch) return;
-        const handoff = resolveWorkbenchHandoff({
-            search: rawSearch,
-            capability: "image",
-            storage: typeof window === "undefined" ? null : window.localStorage,
-        });
-        if (!handoff) return;
-        appliedHandoffSearchRef.current = rawSearch;
-        if (handoff.model) {
-            const latestConfig = { ...useConfigStore.getState().config, channelMode: "local" as const };
-            const matched = matchWorkbenchModelOption(handoff.model, selectableModelsByCapability(latestConfig, "image"));
-            if (matched) updateConfig("imageModel", matched);
-        }
-        if (handoff.prompt) {
-            setPrompt(handoff.prompt);
-            if (!running) {
-                setPreviewLog(null);
-                setResults([]);
-                setReferences([]);
-            }
-        }
-        setSearchParams(new URLSearchParams(handoff.cleanedSearch), { replace: true });
-    }, [running, searchParams, setSearchParams, updateConfig]);
-
     const addReferences = async (files?: FileList | null) => {
+        if (!supportsEdit) return;
         const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/"));
         const nextReferences = await Promise.all(
             imageFiles.map(async (file) => {
@@ -223,9 +205,7 @@ export default function ImagePage() {
         setStartedAt(batchStartedAt);
 
         const logId = nanoid();
-        // banana-2.1 runs as a media task and has no image replay row, so it must
-        // not create attempt ids that the settle step would misread as lost.
-        const replayable = modelOptionName(model) !== "banana-2.1";
+        const replayable = imageTransport(modelOptionName(model)) === "openai-image";
         const attempts = replayable ? await Promise.all(Array.from({ length: generationCount }, () => beginImageAttempt("workbench"))) : [];
         const requestIds = attempts.map((attempt) => attempt.id);
         await saveLog(
@@ -536,8 +516,7 @@ export default function ImagePage() {
         // its request id before the request leaves, exactly like 开始生成, so a
         // refresh during the retry keeps the progress visible.
         const logId = nanoid();
-        // banana-2.1 has no replay row, so a retry must not create one either.
-        const replayable = modelOptionName(model) !== "banana-2.1";
+        const replayable = imageTransport(modelOptionName(model)) === "openai-image";
         const attempt = replayable ? await beginImageAttempt("workbench") : null;
         const requestIds = attempt ? [attempt.id] : [];
         await saveLog(
@@ -614,6 +593,7 @@ export default function ImagePage() {
                             <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
                                     <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">{t("imageWorkbench.title")}</h1>
+                                    {unavailableModel ? <p role="alert">{t("workbench.handoffUnavailable", { model: unavailableModel })}</p> : null}
                                 </div>
                                 <div className="flex shrink-0 gap-2 lg:hidden">
                                     <Button icon={<History className="size-4" />} onClick={() => setLogsOpen(true)}>
@@ -648,10 +628,10 @@ export default function ImagePage() {
                                 <div className="mb-2 flex items-center justify-between gap-3">
                                     <span className="text-base font-semibold">{t("imageWorkbench.references")}</span>
                                     <div className="flex gap-2">
-                                        <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={() => void addReferencesFromClipboard()}>
+                                        <Button size="small" disabled={!supportsEdit} icon={<ClipboardPaste className="size-3.5" />} onClick={() => void addReferencesFromClipboard()}>
                                             {t("workbench.clipboard")}
                                         </Button>
-                                        <Button size="small" icon={<Upload className="size-3.5" />} onClick={() => fileInputRef.current?.click()}>
+                                        <Button size="small" disabled={!supportsEdit} icon={<Upload className="size-3.5" />} onClick={() => fileInputRef.current?.click()}>
                                             {t("workbench.upload")}
                                         </Button>
                                     </div>
@@ -699,7 +679,7 @@ export default function ImagePage() {
                                             </button>
                                         </div>
                                     ))}
-                                    {!references.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">{isReferenceDragActive ? t("imageWorkbench.dropReferences") : t("imageWorkbench.noReferences")}</div> : null}
+                                    {!supportsEdit || !references.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">{!supportsEdit ? t("workbench.imageEditUnavailable") : isReferenceDragActive ? t("imageWorkbench.dropReferences") : t("imageWorkbench.noReferences")}</div> : null}
                                 </div>
                             </div>
 
@@ -713,7 +693,7 @@ export default function ImagePage() {
                             </div>
 
                             <div className="hidden gap-4 sm:grid sm:grid-cols-2">
-                                <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
+                                <GenerationSettings config={effectiveConfig} model={model} onModelChange={selectModel} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
                             </div>
                         </div>
 
@@ -775,7 +755,7 @@ export default function ImagePage() {
             </Drawer>
             <Drawer title={t("workbench.settings")} placement="bottom" size="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
                 <div className="grid grid-cols-2 gap-3 pb-4">
-                    <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
+                    <GenerationSettings config={effectiveConfig} model={model} onModelChange={selectModel} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
                 </div>
             </Drawer>
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
@@ -787,7 +767,7 @@ export default function ImagePage() {
     );
 }
 
-function GenerationSettings({ config, model, updateConfig, openConfigDialog }: { config: AiConfig; model: string; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void }) {
+function GenerationSettings({ config, model, onModelChange, updateConfig, openConfigDialog }: { config: AiConfig; model: string; onModelChange: (value: string) => void; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const { t } = useTranslation();
 
@@ -795,7 +775,7 @@ function GenerationSettings({ config, model, updateConfig, openConfigDialog }: {
         <>
             <label className="col-span-2 block min-w-0 sm:col-span-1">
                 <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">{t("workbench.model")}</span>
-                <ModelPicker config={config} value={model} onChange={(value) => updateConfig("imageModel", value)} capability="image" fullWidth onMissingConfig={() => openConfigDialog(false)} />
+                <ModelPicker config={config} value={model} onChange={onModelChange} capability="image" fullWidth onMissingConfig={() => openConfigDialog(false)} />
             </label>
             <div className="col-span-2">
                 <ImageSettingsPanel config={config} model={model} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-4" maxCount={10} />

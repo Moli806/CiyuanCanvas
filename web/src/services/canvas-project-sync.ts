@@ -1,4 +1,6 @@
-import { CiyuanCanvasProjectDeletedError, deleteServerCanvasProject, fetchServerCanvasProjects, getServerCanvasProject, saveServerCanvasProject } from "@/services/ciyuan";
+import { CiyuanCanvasProjectConflictError, CiyuanCanvasProjectDeletedError, deleteServerCanvasProject, fetchServerCanvasProjects, getServerCanvasProject, saveServerCanvasProject } from "@/services/ciyuan";
+import i18n from "@/i18n";
+import { nanoid } from "nanoid";
 import type { CanvasDeletedProject, CanvasProject, useCanvasStore } from "@/stores/canvas/use-canvas-store";
 
 // Project JSON lives on the server; the IndexedDB copy is a cache. Saves are
@@ -9,6 +11,7 @@ import type { CanvasDeletedProject, CanvasProject, useCanvasStore } from "@/stor
 
 const syncedUpdatedAt = new Map<string, string>();
 const confirmedDeletes = new Set<string>();
+const needsDownload = new Set<string>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 let queue: { projects: CanvasProject[]; deleted: string[] } | null = null;
 let syncController = new AbortController();
@@ -46,15 +49,30 @@ async function flushCanvasSync() {
         }
         for (const project of current.projects) {
             if (signal.aborted) return;
-            if (pendingDeletes.has(project.id) || confirmedDeletes.has(project.id)) continue;
-            if (syncedUpdatedAt.get(project.id) === project.updatedAt) continue;
+            if (pendingDeletes.has(project.id) || confirmedDeletes.has(project.id) || needsDownload.has(project.id)) continue;
+            if (project.cloud?.updatedAt === project.updatedAt || syncedUpdatedAt.get(project.id) === project.updatedAt) continue;
             try {
-                await saveServerCanvasProject(project.id, project, signal);
+                const { cloud, ...data } = project;
+                const saved = await saveServerCanvasProject(project.id, data, signal, cloud?.revision ?? 0);
                 if (signal.aborted) return;
                 syncedUpdatedAt.set(project.id, project.updatedAt);
+                const revision = saved?.revision;
+                if (revision) {
+                    const { useCanvasStore } = await import("@/stores/canvas/use-canvas-store");
+                    if (signal.aborted) return;
+                    const markSaved = (item: CanvasProject) => {
+                        if (item.id !== project.id || (item.cloud?.revision ?? 0) >= revision) return item;
+                        return { ...item, cloud: { revision, updatedAt: project.updatedAt } };
+                    };
+                    const pending = queue as typeof current | null;
+                    if (pending) pending.projects = pending.projects.map(markSaved);
+                    useCanvasStore.setState({ projects: useCanvasStore.getState().projects.map(markSaved) });
+                }
             } catch (error) {
                 if (signal.aborted) return;
-                if (error instanceof CiyuanCanvasProjectDeletedError) {
+                if (error instanceof CiyuanCanvasProjectConflictError) {
+                    needsDownload.add(project.id);
+                } else if (error instanceof CiyuanCanvasProjectDeletedError) {
                     const { useCanvasStore } = await import("@/stores/canvas/use-canvas-store");
                     if (signal.aborted) return;
                     applyConfirmedDeletions(useCanvasStore, [{ id: project.id, deletedAt: new Date().toISOString() }]);
@@ -82,6 +100,7 @@ export function resetCanvasSyncState() {
     queue = null;
     syncedUpdatedAt.clear();
     confirmedDeletes.clear();
+    needsDownload.clear();
 }
 
 function applyConfirmedDeletions(store: typeof useCanvasStore, deletions: CanvasDeletedProject[]) {
@@ -90,6 +109,7 @@ function applyConfirmedDeletions(store: typeof useCanvasStore, deletions: Canvas
     const recorded = new Set(state.deletedProjects.map(({ id }) => id));
     for (const { id } of deletions) {
         confirmedDeletes.add(id);
+        needsDownload.delete(id);
         syncedUpdatedAt.delete(id);
     }
     const projects = state.projects.filter(({ id }) => !confirmedDeletes.has(id));
@@ -116,7 +136,7 @@ function waitForCanvasHydration(store: { getState: () => { hydrated: boolean }; 
 }
 
 /** Pull server projects and merge them into the canvas store (metadata first, payloads on demand). */
-export async function pullAndMergeCanvasProjects({ deletionsOnly = false } = {}): Promise<number> {
+export async function pullAndMergeCanvasProjects({ deletionsOnly = false, requireComplete = false } = {}): Promise<number> {
     const { signal } = syncController;
     const { useCanvasStore } = await import("@/stores/canvas/use-canvas-store");
     await waitForCanvasHydration(useCanvasStore);
@@ -128,17 +148,24 @@ export async function pullAndMergeCanvasProjects({ deletionsOnly = false } = {})
     const tombstoned = new Set(before.deletedProjects.map((project) => project.id));
     const localById = new Map(before.projects.map((project) => [project.id, project]));
     const fetched: CanvasProject[] = [];
-    for (const meta of deletionsOnly ? [] : serverProjects) {
+    for (const meta of serverProjects) {
         if (signal.aborted) return 0;
         if (tombstoned.has(meta.id)) continue;
         const local = localById.get(meta.id);
-        if (local && Date.parse(local.updatedAt) >= meta.updated_at * 1000) continue;
+        if (meta.revision && local?.cloud?.revision === meta.revision) {
+            needsDownload.delete(meta.id);
+            continue;
+        }
+        if (deletionsOnly && !needsDownload.has(meta.id) && !local?.cloud) continue;
+        needsDownload.add(meta.id);
         try {
             const full = await getServerCanvasProject(meta.id, signal);
             if (signal.aborted) return 0;
             const project = full?.data as CanvasProject | undefined;
-            if (project?.id && project.updatedAt) fetched.push(project);
-        } catch {
+            if (project?.id === meta.id && project.updatedAt) fetched.push({ ...project, cloud: { revision: full.revision ?? 0, updatedAt: project.updatedAt } });
+            else if (requireComplete) throw new Error(i18n.t("config.webdav.backupData.cloudReadFailed"));
+        } catch (error) {
+            if (requireComplete) throw error;
             // Skip unreadable payloads; the next pull retries.
         }
     }
@@ -156,18 +183,27 @@ export async function pullAndMergeCanvasProjects({ deletionsOnly = false } = {})
         if (index === undefined) {
             indexById.set(project.id, merged.length);
             merged.push(project);
-            changed += 1;
-            syncedUpdatedAt.set(project.id, project.updatedAt);
-            continue;
+        } else {
+            const local = merged[index];
+            const remoteRevision = project.cloud!.revision;
+            if (remoteRevision && (local.cloud?.revision ?? 0) > remoteRevision) continue;
+            if ((remoteRevision && local.cloud?.revision === remoteRevision) || (!remoteRevision && local.cloud?.revision === 0 && local.cloud.updatedAt === project.updatedAt)) {
+                needsDownload.delete(project.id);
+                continue;
+            }
+            const localChanged = local.cloud ? local.updatedAt !== local.cloud.updatedAt : Date.parse(local.updatedAt) > Date.parse(project.updatedAt);
+            if (localChanged && local.updatedAt !== project.updatedAt) {
+                merged.push({ ...local, id: nanoid(), title: i18n.t("canvas.project.conflictCopy", { title: local.title }), cloud: undefined });
+            }
+            merged[index] = project;
         }
-        if (Date.parse(merged[index].updatedAt) >= Date.parse(project.updatedAt)) continue;
-        merged[index] = project;
+        needsDownload.delete(project.id);
         changed += 1;
         syncedUpdatedAt.set(project.id, project.updatedAt);
     }
     if (changed > 0) useCanvasStore.setState({ projects: merged });
     const latest = useCanvasStore.getState();
-    const hasUnsyncedProjects = latest.projects.some(({ id, updatedAt }) => !confirmedDeletes.has(id) && syncedUpdatedAt.get(id) !== updatedAt);
+    const hasUnsyncedProjects = latest.projects.some(({ id, updatedAt, cloud }) => !confirmedDeletes.has(id) && !needsDownload.has(id) && cloud?.updatedAt !== updatedAt && syncedUpdatedAt.get(id) !== updatedAt);
     const hasPendingDeletes = latest.deletedProjects.some(({ id }) => !confirmedDeletes.has(id));
     if (hasUnsyncedProjects || hasPendingDeletes) {
         scheduleCanvasSync(latest.projects, latest.deletedProjects.map(({ id }) => id));

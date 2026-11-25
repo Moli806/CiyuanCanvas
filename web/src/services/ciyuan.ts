@@ -4,7 +4,7 @@ import { nanoid } from "nanoid";
 import { inferMediaRatio, inferMediaScale, inferVideoRatio } from "@/lib/media-size";
 import { imageToDataUrl } from "@/services/image-storage";
 import { getMediaBlob } from "@/services/file-storage";
-import { buildApiUrl, type AiConfig } from "@/stores/use-config-store";
+import type { AiConfig } from "@/stores/use-config-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
@@ -18,6 +18,11 @@ export type CiyuanVideoSpec = {
     max_images: number;
     max_videos: number;
     max_audios: number;
+    min_images?: number;
+    min_videos?: number;
+    source_video_duration?: boolean;
+    prompt_only?: boolean;
+    spec_required?: boolean;
     max_total_refs?: number;
     needs_video_durations?: boolean;
     requires_all_refs?: boolean;
@@ -32,11 +37,13 @@ export type CiyuanImageSpec = {
     ratios?: string[];
     max_count?: number;
     supports_background?: boolean;
+    supports_edit?: boolean;
 };
 
 export type CiyuanModel = {
     id: string;
     capability: CiyuanCapability;
+    transport?: string;
     icon?: string;
     image?: CiyuanImageSpec;
     video?: CiyuanVideoSpec;
@@ -82,6 +89,7 @@ export type CiyuanServerProject = {
     bytes: number;
     created_at: number;
     updated_at: number;
+    revision?: number;
     data?: unknown;
 };
 
@@ -109,6 +117,14 @@ export function setCiyuanCatalog(models: CiyuanModel[]) {
 
 export function getCiyuanModel(id: string) {
     return catalog.find((model) => model.id === id);
+}
+
+export function imageTransport(model: string) {
+    return getCiyuanModel(model)?.transport ?? (model === "banana-2.1" ? "media-task" : "openai-image");
+}
+
+export function usesSourceVideoDuration(spec?: CiyuanVideoSpec) {
+    return spec?.source_video_duration ?? Boolean(spec?.prompt_optional);
 }
 
 function mergeCiyuanCatalog(models: CiyuanModel[]) {
@@ -338,10 +354,15 @@ export async function createCiyuanVideoTask(
     references: ReferenceImage[],
     options?: { videos?: ReferenceVideo[]; audios?: ReferenceAudio[]; signal?: AbortSignal },
 ): Promise<{ id: string; provider: "ciyuan"; model: string }> {
-    const spec = getCiyuanModel(model)?.video;
-    if (!spec) throw new Error(`词元画布未开放该视频模型：${model}`);
+    const entry = getCiyuanModel(model);
+    const spec = entry?.video;
+    if (!spec || (entry.transport && entry.transport !== "media-task")) throw new Error(`词元画布未开放该视频模型：${model}`);
+    if (spec.spec_required) throw new Error(`${model} 待补充画布规格`);
     const videos = options?.videos || [];
     const audios = options?.audios || [];
+    if (references.length < (spec.min_images ?? 0)) throw new Error(`${model} 至少需要 ${spec.min_images} 张参考图`);
+    const minVideos = spec.min_videos ?? (usesSourceVideoDuration(spec) ? 1 : 0);
+    if (videos.length < minVideos) throw new Error(`${model} 至少需要 ${minVideos} 个参考视频`);
     if (references.length > spec.max_images) {
         throw new Error(`${model} 最多支持 ${spec.max_images} 张参考图`);
     }
@@ -350,6 +371,10 @@ export async function createCiyuanVideoTask(
     }
     if (audios.length > spec.max_audios) {
         throw new Error(`${model} 最多支持 ${spec.max_audios} 个参考音乐`);
+    }
+    if (spec.prompt_only) {
+        if (!prompt.trim()) throw new Error("请输入视频提示词");
+        return submitCiyuanVideo(model, prompt, undefined, options?.signal);
     }
     if (spec.max_total_refs && references.length + videos.length + audios.length > spec.max_total_refs) {
         throw new Error(`${model} 的参考素材合计最多 ${spec.max_total_refs} 个`);
@@ -364,9 +389,7 @@ export async function createCiyuanVideoTask(
         throw new Error("首尾帧模式不支持参考视频或参考音乐");
     }
 
-    const sourceVideoSeconds = spec.prompt_optional && videos[0]?.durationMs ? Math.round((videos[0].durationMs / 1000) * 100) / 100 : 0;
-    const rawDuration = sourceVideoSeconds > 0 ? sourceVideoSeconds : Number(config.videoSeconds) || 6;
-    const duration = spec.prompt_optional ? Math.round(rawDuration * 100) / 100 : Math.trunc(rawDuration);
+    const duration = usesSourceVideoDuration(spec) ? (videos[0]?.durationMs ?? 0) / 1000 : Math.trunc(Number(config.videoSeconds) || 6);
     const maxSeconds = /^omini-/i.test(model) && spec.frames && config.videoMode === "frames" ? Math.min(10, spec.max_seconds) : spec.max_seconds;
     if (duration < spec.min_seconds || duration > maxSeconds) {
         throw new Error(`${model} 时长需为 ${spec.min_seconds}-${maxSeconds} 秒`);
@@ -377,7 +400,8 @@ export async function createCiyuanVideoTask(
     const imageUrls = references.length ? await Promise.all(references.map((image) => uploadReferenceImage(image, options?.signal))) : [];
     const videoUrls = videos.length ? await Promise.all(videos.map((item) => uploadReferenceMedia(item, "ref.mp4", options?.signal))) : [];
     const audioUrls = audios.length ? await Promise.all(audios.map((item) => uploadReferenceMedia(item, "ref.mp3", options?.signal))) : [];
-    const params: Record<string, unknown> = { duration, resolution };
+    const params: Record<string, unknown> = { duration };
+    if (resolution) params.resolution = resolution;
     if (spec.frames && config.videoMode === "frames" && imageUrls.length === 2) {
         params.first_frame_url = imageUrls[0];
         params.last_frame_url = imageUrls[1];
@@ -398,26 +422,34 @@ export async function createCiyuanVideoTask(
         params.aspect_ratio = ratio;
     }
 
-    const created = await ciyuanPost<{ task_id?: string | number }>(config, "/media/generate", { model, prompt, params }, options?.signal);
-    if (!created?.task_id) throw new Error("视频接口没有返回任务 ID");
-    return { id: String(created.task_id), provider: "ciyuan", model };
+    return submitCiyuanVideo(model, prompt, params, options?.signal);
 }
 
-export async function pollCiyuanVideoTask(config: AiConfig, task: { id: string }, signal?: AbortSignal): Promise<CiyuanVideoTaskResult> {
-    const state = await ciyuanGet<{ state?: string; error?: string }>(config, `/media/status/${encodeURIComponent(task.id)}`, signal);
+async function submitCiyuanVideo(model: string, prompt: string, params?: Record<string, unknown>, signal?: AbortSignal) {
+    const created = await ciyuanPost<{ task_id?: string | number }>("/media/generate", params ? { model, prompt, params } : { model, prompt }, signal);
+    if (!created?.task_id) throw new Error("视频接口没有返回任务 ID");
+    return { id: String(created.task_id), provider: "ciyuan" as const, model };
+}
+
+export async function pollCiyuanVideoTask(task: { id: string }, signal?: AbortSignal): Promise<CiyuanVideoTaskResult> {
+    const state = await ciyuanGet<{ state?: string; error?: string }>(`/media/status/${encodeURIComponent(task.id)}`, signal);
     if (state.state === "failed") return { status: "failed", error: state.error || "视频生成失败" };
     if (state.state !== "success") return { status: "pending" };
-    const blob = await ciyuanGetBlob(config, `/tasks/${encodeURIComponent(task.id)}/artifacts/video/content`, signal);
+    const blob = await ciyuanGetBlob(`/tasks/${encodeURIComponent(task.id)}/artifacts/video/content`, signal);
     return { status: "completed", result: { blob } };
 }
 
 export type CiyuanGeneratedImage = { id: string; dataUrl: string; serverUrl?: string };
 
-export async function requestCiyuanBananaImages(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, signal?: AbortSignal): Promise<CiyuanGeneratedImage[]> {
-    if (references.length > 14) throw new Error("banana-2.1 最多支持 14 张参考图");
+export async function requestCiyuanMediaImages(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, signal?: AbortSignal): Promise<CiyuanGeneratedImage[]> {
+    const model = config.model;
+    if (model === "banana-2.1" && references.length > 14) throw new Error("banana-2.1 最多支持 14 张参考图");
     const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
-    const ratio = bananaRatio(config.size);
-    const imageSize = bananaSize(config.size);
+    const spec = getCiyuanModel(model)?.image;
+    const selectedRatio = inferMediaRatio(config.size, "1:1");
+    const scale = inferMediaScale(config.size);
+    const ratio = model === "banana-2.1" ? bananaRatio(config.size) : spec?.ratios?.find((item) => item === selectedRatio);
+    const imageSize = model === "banana-2.1" ? bananaSize(config.size) : spec?.resolutions?.find((item) => item === scale && item !== "auto")?.toUpperCase();
     const results: CiyuanGeneratedImage[] = [];
 
     for (let index = 0; index < count; index += 1) {
@@ -425,19 +457,20 @@ export async function requestCiyuanBananaImages(config: AiConfig, prompt: string
         if (ratio) params.aspect_ratio = ratio;
         if (imageSize) params.image_size = imageSize;
         if (refs.length) params.images = refs;
-        const created = await ciyuanPost<{ task_id?: string | number }>(config, "/media/generate", { model: "banana-2.1", prompt, params }, signal);
+        const body = Object.keys(params).length ? { model, prompt, params } : { model, prompt };
+        const created = await ciyuanPost<{ task_id?: string | number }>("/media/generate", body, signal);
         if (!created?.task_id) throw new Error("图片接口没有返回任务 ID");
         const taskId = String(created.task_id);
-        await waitCiyuanTask(config, taskId, signal);
-        const blob = await ciyuanGetBlob(config, `/tasks/${encodeURIComponent(taskId)}/artifacts/image/content`, signal);
+        await waitCiyuanTask(taskId, signal);
+        const blob = await ciyuanGetBlob(`/tasks/${encodeURIComponent(taskId)}/artifacts/image/content`, signal);
         const dataUrl = await blobToDataUrl(blob);
         let serverUrl: string | undefined;
         try {
-            serverUrl = await uploadCanvasAsset(blob, "banana.png", signal, "generated");
+            serverUrl = await uploadCanvasAsset(blob, "image.png", signal, "generated");
         } catch {
             serverUrl = undefined;
         }
-        results.push({ id: `banana_${nanoid(16)}`, dataUrl, serverUrl });
+        results.push({ id: nanoid(), dataUrl, serverUrl });
     }
     return results;
 }
@@ -490,11 +523,11 @@ async function uploadReferenceMedia(item: ReferenceVideo | ReferenceAudio, fallb
     return uploadCanvasAsset(blob, fallbackName, signal);
 }
 
-async function waitCiyuanTask(config: AiConfig, taskId: string, signal?: AbortSignal) {
+async function waitCiyuanTask(taskId: string, signal?: AbortSignal) {
     const deadline = Date.now() + 20 * 60 * 1000;
     for (;;) {
         if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-        const state = await ciyuanGet<{ state?: string; error?: string }>(config, `/media/status/${encodeURIComponent(taskId)}`, signal);
+        const state = await ciyuanGet<{ state?: string; error?: string }>(`/media/status/${encodeURIComponent(taskId)}`, signal);
         if (state.state === "failed") throw new Error(state.error || "图片生成失败");
         if (state.state === "success") return;
         if (Date.now() >= deadline) throw new Error(`任务 ${taskId} 等待超时，请勿重复提交`);
@@ -529,27 +562,27 @@ function bananaSize(size: string) {
     return undefined;
 }
 
-async function ciyuanPost<T>(config: AiConfig, path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+async function ciyuanPost<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
     try {
-        const response = await ciyuanAxios({ method: "post", url: apiUrl(config, path), data: body, headers: { "Content-Type": "application/json" }, signal });
+        const response = await ciyuanAxios({ method: "post", url: `/v1${path}`, data: body, headers: { "Content-Type": "application/json" }, signal });
         return unwrap<T>(response.data);
     } catch (error) {
         throw new Error(readError(error));
     }
 }
 
-async function ciyuanGet<T>(config: AiConfig, path: string, signal?: AbortSignal): Promise<T> {
+async function ciyuanGet<T>(path: string, signal?: AbortSignal): Promise<T> {
     try {
-        const response = await ciyuanAxios({ method: "get", url: apiUrl(config, path), signal });
+        const response = await ciyuanAxios({ method: "get", url: `/v1${path}`, signal });
         return unwrap<T>(response.data);
     } catch (error) {
         throw new Error(readError(error));
     }
 }
 
-async function ciyuanGetBlob(config: AiConfig, path: string, signal?: AbortSignal) {
+async function ciyuanGetBlob(path: string, signal?: AbortSignal) {
     try {
-        const response = await ciyuanAxios<Blob>({ method: "get", url: apiUrl(config, path), responseType: "blob", signal });
+        const response = await ciyuanAxios<Blob>({ method: "get", url: `/v1${path}`, responseType: "blob", signal });
         const blob = response.data;
         if (blob.type.includes("json")) {
             let message = "下载生成结果失败";
@@ -695,10 +728,6 @@ function chatContentText(content: unknown): string {
     return "";
 }
 
-function apiUrl(config: AiConfig, path: string) {
-    return buildApiUrl(config.baseUrl, path);
-}
-
 function unwrap<T>(payload: unknown): T {
     if (payload && typeof payload === "object" && "code" in payload) {
         const record = payload as { code?: unknown; data?: unknown };
@@ -762,6 +791,7 @@ function delay(ms: number, signal?: AbortSignal) {
 }
 
 export class CiyuanCanvasProjectDeletedError extends Error {}
+export class CiyuanCanvasProjectConflictError extends Error {}
 
 async function canvasJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     const response = await sessionRequest(path, init);
@@ -769,6 +799,9 @@ async function canvasJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     if (response.status === 401 || response.status === 403) throw new CiyuanUnauthorizedError();
     if (response.status === 410 && init.method === "PUT" && path.startsWith("/api/canvas/projects/")) {
         throw new CiyuanCanvasProjectDeletedError(readMessage(payload));
+    }
+    if (response.status === 409 && init.method === "PUT" && path.startsWith("/api/canvas/projects/")) {
+        throw new CiyuanCanvasProjectConflictError(readMessage(payload));
     }
     if (!response.ok || !payload?.success) throw new Error(readMessage(payload) || "请求失败");
     return payload.data as T;
@@ -810,10 +843,10 @@ export function fetchServerCanvasProjects(signal?: AbortSignal) {
     return canvasJson<{ projects: CiyuanServerProject[]; deleted_projects?: { id: string; deleted_at: number }[] }>("/api/canvas/projects", { cache: "no-store", signal });
 }
 
-export function saveServerCanvasProject(id: string, project: unknown, signal?: AbortSignal) {
-    return canvasJson<{ id: string; bytes: number; saved_at: number }>(`/api/canvas/projects/${encodeURIComponent(id)}`, {
+export function saveServerCanvasProject(id: string, project: unknown, signal?: AbortSignal, baseRevision = 0) {
+    return canvasJson<{ id: string; bytes: number; saved_at: number; revision?: number }>(`/api/canvas/projects/${encodeURIComponent(id)}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Canvas-Base-Revision": String(baseRevision) },
         body: JSON.stringify(project),
         signal,
     });

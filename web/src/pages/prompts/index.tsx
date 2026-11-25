@@ -5,36 +5,44 @@ import { useTranslation } from "react-i18next";
 
 import { PromptCard } from "@/components/prompts/prompt-card";
 import { usePromptList } from "@/components/prompts/use-prompt-list";
+import { usePromptAction } from "@/components/prompts/use-prompt-action";
 import { PromptDetailDialog } from "./components/prompt-detail-dialog";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { cn } from "@/lib/utils";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { ALL_PROMPTS_OPTION, type Prompt } from "@/services/api/prompts";
+import { resolveLibraryPrompt } from "@/services/api/prompt-library";
 
 export default function PromptsPage() {
     const { message } = App.useApp();
     const { t } = useTranslation();
     const [titleKeyword, setTitleKeyword] = useState("");
-    const [selectedTags, setSelectedTags] = useState<string[]>([]);
-    const [selectedCategory, setSelectedCategory] = useState(ALL_PROMPTS_OPTION);
     const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
     const addAsset = useAssetStore((state) => state.addAsset);
     const copyText = useCopyText();
-    const { query, items: promptItems, tags: promptTags, categories: promptCategoryOptions, total: totalPrompts } = usePromptList({ keyword: titleKeyword, tags: selectedTags, category: selectedCategory });
+    const { query, items: promptItems, tags: promptTags, categories: promptCategoryOptions, total: totalPrompts, selectedCategory, setSelectedCategory, selectedTags, toggleTag, incomplete, retryLibrary } = usePromptList({ keyword: titleKeyword });
+    const action = usePromptAction();
 
     useEffect(() => {
         if (query.isError) message.error(query.error instanceof Error ? query.error.message : t("prompts.loadFailed"));
     }, [message, query.error, query.isError, t]);
 
-    const toggleTag = (tag: string) => {
-        if (tag === ALL_PROMPTS_OPTION) return setSelectedTags([]);
-        setSelectedTags((items) => (items.includes(tag) ? items.filter((item) => item !== tag) : [...items, tag]));
-    };
-
     const savePromptAsset = (item: Prompt) => {
         addAsset({ kind: "text", title: item.title, coverUrl: item.coverUrl, tags: item.tags, source: item.category, data: { content: item.prompt }, metadata: { source: "prompt-library", promptId: item.id, githubUrl: item.githubUrl } });
         message.success(t("common.addedToAssets"));
     };
+
+    function copyPrompt(item: Prompt) {
+        if (item.prompt) return copyText(item.prompt, t("common.promptCopied"));
+        if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+            setSelectedPrompt(item);
+            return;
+        }
+        const text = resolveLibraryPrompt(item).then((resolved) => new Blob([resolved.prompt], { type: "text/plain" }));
+        void navigator.clipboard.write([new ClipboardItem({ "text/plain": text })])
+            .then(() => message.success(t("common.promptCopied")))
+            .catch(() => setSelectedPrompt(item));
+    }
 
     const handleListScroll = (event: UIEvent<HTMLDivElement>) => {
         const target = event.currentTarget;
@@ -64,9 +72,11 @@ export default function PromptsPage() {
                         </aside>
                         <section className="min-w-0">
                             <Input size="large" prefix={<Search className="size-4 text-stone-400" />} value={titleKeyword} placeholder={t("prompts.search")} onChange={(event) => setTitleKeyword(event.target.value)} />
+                            {incomplete ? <div role="alert" className="mt-3 text-sm">{t("prompts.libraryUnavailable")} <Button size="small" onClick={retryLibrary}>{t("common.retry")}</Button></div> : null}
+                            {action.feedback}
                             {query.isLoading ? <div className="flex h-60 items-center justify-center"><Spin /></div> : null}
-                            {!query.isLoading ? <div className="mt-5"><PromptGrid items={promptItems} onOpen={setSelectedPrompt} renderActions={(item) => <Button type="text" size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => savePromptAsset(item)}>{t("common.addToAssets")}</Button>} onCopy={(item) => copyText(item.prompt, t("common.promptCopied"))} emptyText={t("prompts.empty")} /></div> : null}
-                            <div className="mt-6 text-center text-xs text-stone-500 dark:text-stone-400">{query.isFetchingNextPage ? t("prompts.loading") : query.hasNextPage ? t("prompts.loadMore") : promptItems.length > 0 ? t("prompts.end") : null}</div>
+                            {!query.isLoading ? <div className="mt-5"><PromptGrid items={promptItems} onOpen={setSelectedPrompt} renderActions={(item) => <Button type="text" size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => void action.run(item, savePromptAsset)}>{t("common.addToAssets")}</Button>} onCopy={copyPrompt} emptyText={t("prompts.empty")} /></div> : null}
+                            <div className="mt-6 text-center text-xs text-stone-500 dark:text-stone-400">{query.hasNextPage ? <Button size="small" loading={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>{t("prompts.loadMore")}</Button> : promptItems.length > 0 ? t("prompts.end") : null}</div>
                         </section>
                     </div>
                 </div>

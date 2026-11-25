@@ -1,128 +1,125 @@
 import i18n from "@/i18n";
-import { withLocalProxy, type WebdavSyncConfig } from "@/stores/use-config-store";
+import type { WebdavSyncConfig } from "@/stores/use-config-store";
 
 export const WEBDAV_MANIFEST_FILE_NAME = "manifest.json";
 const WEBDAV_REQUEST_TIMEOUT_MS = 120000;
-const ensuredDirectories = new Set<string>();
+const directories = new WeakMap<WebdavSyncConfig, Map<string, Promise<void>>>();
 const webdavText = (key: string, options?: Record<string, unknown>) => i18n.t(`config.webdav.errors.${key}`, options);
 
-export async function testWebdavConnection(config: WebdavSyncConfig) {
-    await ensureWebdavDirectory(config);
-    const response = await webdavFetch(config, "", { method: "PROPFIND", headers: { Depth: "0" } });
-    if (response.ok || response.status === 207) return;
-    await throwWebdavError(response, webdavText("testFailed"));
+function pathParts(path: string) {
+    const parts = path.trim().split("/").filter(Boolean);
+    if (parts.some((part) => part === "." || part === ".." || part.includes("\\"))) throw new Error(i18n.t("config.personal.invalidDirectory"));
+    return parts;
 }
 
-export async function downloadWebdavSyncFile(config: WebdavSyncConfig) {
-    return downloadWebdavFile(config, WEBDAV_MANIFEST_FILE_NAME);
-}
-
-export async function downloadWebdavFile(config: WebdavSyncConfig, path: string) {
-    await ensureWebdavDirectory(config);
-    const response = await webdavFetch(config, path, { method: "GET" });
-    if (response.status === 404) return null;
-    if (!response.ok) await throwWebdavError(response, webdavText("downloadFailed"));
-    const file = await withTimeout(response.blob(), webdavText("downloadTimeout"));
-    return file.size ? file : null;
-}
-
-export async function uploadWebdavSyncFile(config: WebdavSyncConfig, file: Blob) {
-    return uploadWebdavFile(config, WEBDAV_MANIFEST_FILE_NAME, file, "application/json");
-}
-
-export async function uploadWebdavFile(config: WebdavSyncConfig, path: string, file: Blob, contentType = "application/octet-stream") {
-    if (!file.size) throw new Error(webdavText("emptyUpload"));
-    await ensureWebdavDirectory(config);
-    await ensureWebdavSubdirectory(config, path);
-    const response = await webdavFetch(config, path, {
-        method: "PUT",
-        headers: { "Content-Type": contentType },
-        body: file,
-    });
-    if (!response.ok) await throwWebdavError(response, webdavText("uploadFailed"));
-}
-
-async function ensureWebdavDirectory(config: WebdavSyncConfig) {
-    assertWebdavConfig(config);
-    await ensureWebdavDirectoryPath(config, config.directory);
-}
-
-async function ensureWebdavSubdirectory(config: WebdavSyncConfig, path: string) {
-    const directory = normalizePath(path).split("/").slice(0, -1).join("/");
-    if (!directory) return;
-    await ensureWebdavDirectoryPath(config, [config.directory, directory].filter(Boolean).join("/"));
-}
-
-async function ensureWebdavDirectoryPath(config: WebdavSyncConfig, directory: string) {
-    const parts = normalizePath(directory).split("/").filter(Boolean);
-    const cacheKey = `${config.url}:${parts.join("/")}`;
-    if (ensuredDirectories.has(cacheKey)) return;
-    let path = "";
-    for (const part of parts) {
-        path = path ? `${path}/${part}` : part;
-        const response = await webdavFetch({ ...config, directory: "" }, path, { method: "MKCOL" });
-        if (response.ok || ((response.status === 405 || response.status === 423) && (await webdavDirectoryExists(config, path)))) continue;
-        await throwWebdavError(response, webdavText("directoryFailed"));
-    }
-    ensuredDirectories.add(cacheKey);
-}
-
-async function webdavDirectoryExists(config: WebdavSyncConfig, path: string) {
-    const response = await webdavFetch({ ...config, directory: "" }, path, { method: "PROPFIND", headers: { Depth: "0" } });
-    return response.ok || response.status === 207;
-}
-
-async function webdavFetch(config: WebdavSyncConfig, path: string, init: RequestInit) {
-    const headers = new Headers(init.headers);
-    if (config.username || config.password) headers.set("Authorization", `Basic ${encodeBasicAuth(`${config.username}:${config.password}`)}`);
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), WEBDAV_REQUEST_TIMEOUT_MS);
+function endpoint(config: WebdavSyncConfig, parts: string[], collection: boolean) {
+    const raw = config.url.trim();
+    if (!raw) throw new Error(webdavText("urlRequired"));
+    let url: URL;
     try {
-        const url = withLocalProxy(buildWebdavUrl(config, path));
-        return await fetch(url, { ...init, headers, signal: controller.signal });
+        url = new URL(raw);
+    } catch {
+        throw new Error(i18n.t("config.personal.invalidUrl"));
+    }
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || raw.includes("\\")) throw new Error(i18n.t("config.personal.invalidUrl"));
+    url.pathname = [url.pathname.replace(/\/+$/, ""), ...parts.map(encodeURIComponent)].join("/") + (collection ? "/" : "");
+    return url.href;
+}
+
+async function request<T>(config: WebdavSyncConfig, parts: string[], collection: boolean, options: RequestInit, read: (response: Response) => T | Promise<T>) {
+    const url = endpoint(config, parts, collection);
+    const headers = new Headers(options.headers);
+    if (config.username || config.password) {
+        const bytes = new TextEncoder().encode(`${config.username}:${config.password}`);
+        headers.set("Authorization", `Basic ${btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""))}`);
+    }
+    const signal = options.signal;
+    signal?.throwIfAborted();
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(abort, WEBDAV_REQUEST_TIMEOUT_MS);
+    try {
+        const response = await fetch(url, { ...options, headers, credentials: "omit", mode: "cors", redirect: "error", referrerPolicy: "no-referrer", cache: "no-store", signal: controller.signal });
+        return await read(response);
     } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") throw new Error(webdavText("requestTimeout"));
+        signal?.throwIfAborted();
+        if (controller.signal.aborted) throw new Error(webdavText("requestTimeout"));
         if (error instanceof TypeError) throw new Error(webdavText("connectionFailed"));
         throw error;
     } finally {
-        window.clearTimeout(timer);
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
     }
 }
 
-function buildWebdavUrl(config: WebdavSyncConfig, path: string) {
-    const baseUrl = config.url.trim().replace(/\/+$/, "");
-    const remotePath = [normalizePath(config.directory), normalizePath(path)].filter(Boolean).join("/");
-    if (!remotePath) return baseUrl;
-    return `${baseUrl}/${remotePath.split("/").map(encodeURIComponent).join("/")}`;
-}
-
-function normalizePath(path: string) {
-    return path.trim().replace(/^\/+|\/+$/g, "");
-}
-
-function assertWebdavConfig(config: WebdavSyncConfig) {
-    if (!config.url.trim()) throw new Error(webdavText("urlRequired"));
-}
-
-async function throwWebdavError(response: Response, fallback: string): Promise<never> {
-    const detail = await response.text().catch(() => "");
+function checkResponse(response: Response, fallback: string) {
+    if (response.ok) return;
     if (response.status === 401 || response.status === 403) throw new Error(webdavText("authenticationFailed"));
     if (response.status === 404) throw new Error(webdavText("pathMissing"));
-    throw new Error(webdavText("responseFailed", { fallback, status: response.status, detail: detail ? ` ${detail.slice(0, 120)}` : "" }));
+    throw new Error(webdavText("responseFailed", { fallback: webdavText(fallback), status: response.status, detail: "" }));
 }
 
-function encodeBasicAuth(value: string) {
-    const bytes = new TextEncoder().encode(value);
-    let binary = "";
-    bytes.forEach((byte) => {
-        binary += String.fromCharCode(byte);
-    });
-    return btoa(binary);
+function checkCollection(config: WebdavSyncConfig, parts: string[], signal?: AbortSignal) {
+    return request(config, parts, true, { method: "PROPFIND", headers: { Depth: "0" }, signal }, (response) => checkResponse(response, "testFailed"));
 }
 
-function withTimeout<T>(promise: Promise<T>, message: string) {
-    return new Promise<T>((resolve, reject) => {
-        const timer = window.setTimeout(() => reject(new Error(message)), WEBDAV_REQUEST_TIMEOUT_MS);
-        promise.then(resolve, reject).finally(() => window.clearTimeout(timer));
+export async function testWebdavConnection(config: WebdavSyncConfig, signal?: AbortSignal) {
+    pathParts(config.directory);
+    await checkCollection(config, [], signal);
+}
+
+async function createCollection(config: WebdavSyncConfig, parts: string[], signal?: AbortSignal) {
+    const exists = await request(config, parts, true, { method: "MKCOL", signal }, (response) => {
+        if (response.status === 405 || response.status === 423) return true;
+        checkResponse(response, "directoryFailed");
+        return false;
     });
+    if (exists) await checkCollection(config, parts, signal);
+}
+
+async function ensureCollections(config: WebdavSyncConfig, parts: string[], signal?: AbortSignal) {
+    let cache = directories.get(config);
+    if (!cache) directories.set(config, (cache = new Map()));
+    for (let count = 1; count <= parts.length; count++) {
+        const parent = parts.slice(0, count);
+        const key = parent.join("/");
+        let created = cache.get(key);
+        if (!created) {
+            created = createCollection(config, parent, signal);
+            cache.set(key, created);
+        }
+        try {
+            await created;
+        } catch (error) {
+            cache.delete(key);
+            throw error;
+        }
+    }
+}
+
+export function downloadWebdavFile(config: WebdavSyncConfig, path: string, signal?: AbortSignal) {
+    const parts = [...pathParts(config.directory), ...pathParts(path)];
+    return request(config, parts, false, { method: "GET", signal }, (response) => {
+        if (response.status === 404) return null;
+        checkResponse(response, "downloadFailed");
+        return response.blob();
+    });
+}
+
+export function webdavFileHasSize(config: WebdavSyncConfig, path: string, bytes: number, signal?: AbortSignal) {
+    const parts = [...pathParts(config.directory), ...pathParts(path)];
+    return request(config, parts, false, { method: "HEAD", signal }, (response) => {
+        if ([404, 405, 501].includes(response.status)) return false;
+        checkResponse(response, "downloadFailed");
+        const length = response.headers.get("Content-Length");
+        return response.status === 200 && length !== null && Number(length) === bytes;
+    });
+}
+
+export async function uploadWebdavFile(config: WebdavSyncConfig, path: string, file: Blob, contentType = "application/octet-stream", signal?: AbortSignal) {
+    if (!file.size) throw new Error(webdavText("emptyUpload"));
+    const parts = [...pathParts(config.directory), ...pathParts(path)];
+    await ensureCollections(config, parts.slice(0, -1), signal);
+    return request(config, parts, false, { method: "PUT", headers: { "Content-Type": contentType }, body: file, signal }, (response) => checkResponse(response, "uploadFailed"));
 }

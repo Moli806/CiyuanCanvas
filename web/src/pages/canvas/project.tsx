@@ -2464,7 +2464,8 @@ function InfiniteCanvasPage() {
 
             try {
                 if (mode === "image") {
-                    const count = getGenerationCount(generationConfig.count);
+                    const imageSpec = getCiyuanModel(modelOptionName(generationConfig.model))?.image;
+                    const count = Math.min(getGenerationCount(generationConfig.count), imageSpec?.max_count ?? Infinity);
                     const isConfigNode = sourceNode?.type === CanvasNodeType.Config;
                     const isImageNode = sourceNode?.type === CanvasNodeType.Image;
                     const isEmptyImageNode = isImageNode && !sourceNode?.metadata?.content;

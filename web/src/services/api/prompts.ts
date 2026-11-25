@@ -4,11 +4,15 @@ import { runPromptSource, type RawPrompt } from "./prompt-source-runtime";
 import { usePromptSourceStore } from "@/stores/use-prompt-source-store";
 import i18n from "@/i18n";
 import type { PromptSource } from "./prompt-source-presets";
+import { getCiyuanPromptCatalog } from "./ciyuan-prompt-catalog";
+import { getPromptLibrary, type NativePromptSource } from "./prompt-library";
 
 export type Prompt = RawPrompt & {
     sourceId: string;
     category: string;
     githubUrl: string;
+    entryUrl?: string;
+    nativeSource?: NativePromptSource;
 };
 
 export const ALL_PROMPTS_OPTION = "all";
@@ -123,33 +127,22 @@ async function getSourcePrompts(source: PromptSource): Promise<Prompt[]> {
     return (await readSourceCache(source.id))?.items || [];
 }
 
-async function getAllPrompts(): Promise<Prompt[]> {
-    const settled = await Promise.all(
-        enabledSources().map(async (source) => {
-            try {
-                return await getSourcePrompts(source);
-            } catch {
-                return [];
-            }
-        }),
-    );
-    return settled.flat();
-}
-
-export async function fetchPrompts({ keyword = "", tag = [], category = ALL_PROMPTS_OPTION, page = 1, pageSize = 20 }: { keyword?: string; tag?: string[]; category?: string; page?: number; pageSize?: number } = {}) {
-    const items = await getAllPrompts();
+export async function fetchPrompts({ keyword = "", tag = [], category = ALL_PROMPTS_OPTION, page = 1, pageSize = 20, language = i18n.resolvedLanguage ?? "zh-CN" }: { keyword?: string; tag?: string[]; category?: string; page?: number; pageSize?: number; language?: string } = {}) {
+    const library = await getPromptLibrary();
+    const items = [...getCiyuanPromptCatalog(language), ...library.items];
     const normalizedKeyword = keyword.trim().toLowerCase();
     const normalizedPage = Math.max(1, page);
     const normalizedPageSize = Math.max(1, Math.min(100, pageSize));
     const withoutTagFilter = filterPrompts(items, { keyword: normalizedKeyword, category, tags: [] });
-    const filtered = filterPrompts(items, { keyword: normalizedKeyword, category, tags: tag });
-    const categories = enabledSources().map((source) => source.name);
+    const filtered = tag.length ? withoutTagFilter.filter((item) => tag.some((name) => item.tags.includes(name))) : withoutTagFilter;
+    const categories = [...new Set(items.map((item) => item.category))];
 
     return {
         items: filtered.slice((normalizedPage - 1) * normalizedPageSize, normalizedPage * normalizedPageSize),
         tags: collectTags(withoutTagFilter),
         categories,
         total: filtered.length,
+        incomplete: library.incomplete,
     };
 }
 
@@ -208,7 +201,7 @@ function filterPrompts(items: Prompt[], options: { keyword: string; category: st
         if (isActiveOption(options.category) && item.category !== options.category) return false;
         if (options.tags.length && !options.tags.some((tag) => item.tags.includes(tag))) return false;
         if (!options.keyword) return true;
-        return [item.title, item.prompt, item.description, item.category, ...item.tags].join(" ").toLowerCase().includes(options.keyword);
+        return [item.title, item.prompt, item.description, item.category, item.author, ...item.tags].join(" ").toLowerCase().includes(options.keyword);
     });
 }
 

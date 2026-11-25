@@ -24,14 +24,14 @@ const { CanvasNodeType } = await import("../src/types/canvas");
 
 const config: AiConfig = {
     ...defaultConfig,
-    videoModel: "replacement::video-b",
+    videoModel: "ciyuan::video-b",
     channels: [
         {
-            id: "replacement",
-            name: "Replacement",
-            baseUrl: "https://example.com",
-            apiKey: "test-key",
-            apiFormat: "openai",
+            id: "ciyuan",
+            name: "词元 API",
+            baseUrl: "https://canvas.example",
+            apiKey: "",
+            apiFormat: "ciyuan",
             models: [
                 { name: "video-b", capability: "video" },
                 { name: "video-a", capability: "video" },
@@ -48,7 +48,7 @@ const videoNode = (model: string): CanvasNodeData => ({
     position: { x: 0, y: 0 },
     width: 320,
     height: 180,
-    metadata: { model, videoTaskId: "original-task", videoTaskProvider: "openai", seconds: "4" },
+    metadata: { model, videoTaskId: "original-task", videoTaskProvider: "ciyuan", seconds: "4" },
 });
 
 test("a saved video on a removed provider is not replaced by the default video model", () => {
@@ -57,9 +57,9 @@ test("a saved video on a removed provider is not replaced by the default video m
     expect(ready(selected, selected.model)).toBe(false);
 });
 
-test("removing a model from an existing provider prevents retry even with valid credentials", () => {
-    const selected = buildGenerationConfig(config, videoNode("replacement::deleted-video"), "video");
-    expect(selected.model).toBe("replacement::deleted-video");
+test("removing a model from the Ciyuan catalog prevents a new generation with that selection", () => {
+    const selected = buildGenerationConfig(config, videoNode("ciyuan::deleted-video"), "video");
+    expect(selected.model).toBe("ciyuan::deleted-video");
     expect(ready(selected, selected.model)).toBe(false);
 });
 
@@ -76,21 +76,22 @@ test("an explicitly selected unavailable default is not replaced by the built-in
 
 test("a new node without a selection still uses its configured default", () => {
     const selected = buildGenerationConfig(config, undefined, "video");
-    expect(selected.model).toBe("replacement::video-b");
+    expect(selected.model).toBe("ciyuan::video-b");
     expect(ready(selected, selected.model)).toBe(true);
 });
 
 test("switching generation capability still selects a model of the new capability", () => {
-    expect(resolveModelForCapability(config, "replacement::image-a", "video")).toBe("replacement::video-b");
+    expect(resolveModelForCapability(config, "ciyuan::image-a", "video")).toBe("ciyuan::video-b");
 });
 
-test("changing only the key on the same provider preserves the saved model and task", () => {
-    const node = videoNode("replacement::video-a");
-    const selected = buildGenerationConfig({ ...config, channels: [{ ...config.channels[0], apiKey: "rotated-key" }] }, node, "video");
-    expect(selected.model).toBe("replacement::video-a");
+test("an official model uses the canvas session and a restored personal provider cannot submit tasks", () => {
+    const node = videoNode("ciyuan::video-a");
+    const selected = buildGenerationConfig(config, node, "video");
+    expect(selected.model).toBe("ciyuan::video-a");
     expect(ready(selected, selected.model)).toBe(true);
     expect(node.metadata?.videoTaskId).toBe("original-task");
-    expect(ready({ ...selected, channels: [{ ...config.channels[0], apiKey: "" }] }, selected.model)).toBe(false);
+    const personal = { ...config.channels[0], id: "personal", apiFormat: "openai" as const, apiKey: "test-key" };
+    expect(ready({ ...selected, channels: [personal] }, "personal::video-a")).toBe(false);
 });
 
 test("unavailable explicit selections are preserved for every generation capability", () => {

@@ -45,31 +45,30 @@ export function PromptOptimizerDialog({ open, kind, initialPrompt, onClose, onAp
     const { t } = useTranslation();
     const config = useEffectiveConfig();
     const group = useCiyuanStore((state) => state.user?.group || "default");
+    const canvasModels = useCiyuanStore((state) => state.models);
     const [draft, setDraft] = useState(initialPrompt);
     const [model, setModel] = useState("");
     const [count, setCount] = useState(3);
     const [variants, setVariants] = useState<Variant[]>([]);
-    const [textModels, setTextModels] = useState<CiyuanTextModel[]>([]);
+    const [directory, setDirectory] = useState<{ group: string; models: CiyuanTextModel[] } | null>(null);
     const [running, setRunning] = useState(false);
     const abortRef = useRef<AbortController | null>(null);
 
     const promptConfig = useMemo(() => {
-        if (!textModels.length) return config;
-        const channel = config.channels.find((item) => item.id === "ciyuan") ?? config.channels[0];
-        if (!channel) return config;
+        const textModels = directory?.group === group ? directory.models : [];
+        const channel = config.channels.find((item) => item.id === "ciyuan");
         const models = textModels
             .filter((item) => {
                 const capability = getCiyuanModel(item.id)?.capability;
                 return !capability || capability === "text";
             })
             .map((item) => ({ name: item.id, capability: "text" as const }));
-        if (!models.length) return config;
         return {
             ...config,
-            channels: [{ ...channel, models }],
-            models: models.map((item) => encodeChannelModel(channel.id, item.name)),
+            channels: channel ? [{ ...channel, models }] : [],
+            models: channel ? models.map((item) => encodeChannelModel(channel.id, item.name)) : [],
         };
-    }, [config, textModels]);
+    }, [config, directory, group]);
     const availableModels = useMemo(() => selectableModelsByCapability(promptConfig, "text"), [promptConfig]);
     const defaultModel = useMemo(() => {
         const currentName = modelOptionName(config.textModel);
@@ -85,22 +84,28 @@ export function PromptOptimizerDialog({ open, kind, initialPrompt, onClose, onAp
         abortRef.current = null;
         // Only re-seed when the dialog opens; bootstrap refreshes must not overwrite the draft.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open]);
+    }, [open, group]);
 
     useEffect(() => {
-        if (!open) return;
+        if (!open) {
+            setDirectory(null);
+            return;
+        }
         let cancelled = false;
-        fetchCiyuanTextModels(group)
+        fetchCiyuanTextModels(group, true)
             .then((models) => {
-                if (!cancelled) setTextModels(models);
+                if (!cancelled) setDirectory({ group, models });
             })
             .catch(() => {
-                if (!cancelled) message.warning(t("promptOptimizer.modelListFallback"));
+                if (!cancelled) {
+                    setDirectory(null);
+                    message.warning(t("promptOptimizer.modelListFailed"));
+                }
             });
         return () => {
             cancelled = true;
         };
-    }, [open, group, message, t]);
+    }, [open, group, canvasModels, message, t]);
 
     useEffect(() => {
         if (!open) return;
@@ -115,7 +120,7 @@ export function PromptOptimizerDialog({ open, kind, initialPrompt, onClose, onAp
             message.warning(t("promptOptimizer.promptRequired"));
             return;
         }
-        if (!model) {
+        if (!availableModels.includes(model)) {
             message.warning(t("promptOptimizer.noModel"));
             return;
         }
@@ -198,7 +203,7 @@ export function PromptOptimizerDialog({ open, kind, initialPrompt, onClose, onAp
                         <span className="mb-1.5 block text-sm font-semibold">{t("promptOptimizer.countLabel")}</span>
                         <InputNumber className="w-full" min={1} max={MAX_VARIANTS} precision={0} value={count} disabled={running} onChange={(value) => setCount(Math.max(1, Math.min(MAX_VARIANTS, Number(value) || 1)))} />
                     </label>
-                    <Button type="primary" danger={running} icon={running ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />} onClick={running ? stop : start}>
+                    <Button type="primary" danger={running} disabled={!running && !availableModels.includes(model)} icon={running ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />} onClick={running ? stop : start}>
                         {t(running ? "promptOptimizer.stop" : "promptOptimizer.start")}
                     </Button>
                 </div>

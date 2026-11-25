@@ -26,6 +26,8 @@ export const router = createBrowserRouter(
                 { path: "/image", element: <ImagePage /> },
                 { path: "/video", element: <VideoPage /> },
                 { path: "/assets", element: <AssetsPage /> },
+                { path: "/prompts", lazy: async () => ({ Component: (await import("@/pages/prompts")).default }) },
+                { path: "/config", lazy: async () => ({ Component: (await import("@/pages/config")).default }) },
                 { path: "/canvas", element: <CanvasPage /> },
                 { path: "/canvas/:id", element: <CanvasProjectPage /> },
             ],

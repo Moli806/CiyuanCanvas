@@ -194,7 +194,7 @@ export function resolveModelForCapability(config: AiConfig, currentModel: string
         // request. Only a known capability switch may choose another model.
         if (!configuredCapability || configuredCapability === capability) return model;
     }
-    return fallbackModel;
+    return config.apiFormat === "ciyuan" ? "" : fallbackModel;
 }
 
 export function selectableModelsByCapability(config: AiConfig, capability?: ModelCapability) {
@@ -204,13 +204,13 @@ export function selectableModelsByCapability(config: AiConfig, capability?: Mode
 
 /** The user script (if any) attached to a model; empty string means use the system default call. */
 export function resolveModelScript(config: AiConfig, value: string) {
-    return findChannelModel(config, value)?.model.script?.trim() || "";
+    const match = findChannelModel(config, value);
+    return match?.channel.id === "ciyuan" ? "" : match?.model.script?.trim() || "";
 }
 
 function isAiConfigReady(config: AiConfig, model: string) {
     const match = findChannelModel(config, model);
-    if (!match || !match.channel.baseUrl.trim()) return false;
-    return match.channel.apiFormat === "ciyuan" || Boolean(match.channel.apiKey.trim());
+    return match?.channel.id === "ciyuan" && match.channel.apiFormat === "ciyuan";
 }
 
 export const useConfigStore = create<ConfigStore>()(
@@ -426,22 +426,10 @@ export function normalizeModelOptionValue(value: string | undefined, channels: M
     return channel && channel.models.some((item) => item.name === model) ? encodeChannelModel(channel.id, model) : model;
 }
 
-export function resolveModelChannel(config: AiConfig, value: string) {
-    const decoded = decodeChannelModel(value);
-    const model = decoded?.model || value;
-    const matched = decoded ? config.channels.find((channel) => channel.id === decoded.channelId) : config.channels.find((channel) => channel.models.some((item) => item.name === model));
-    return matched || config.channels[0] || createModelChannel({ id: "default", name: i18n.t("config.channels.defaultName"), baseUrl: config.baseUrl, apiKey: config.apiKey, apiFormat: config.apiFormat, models: config.models.map(modelOptionName).map((name) => ({ name, capability: guessCapability(name) })) });
-}
-
-export function resolveModelRequestConfig(config: AiConfig, value: string) {
-    const channel = resolveModelChannel(config, value);
-    return {
-        ...config,
-        model: modelOptionName(value || config.model),
-        baseUrl: channel.baseUrl,
-        apiKey: channel.apiKey,
-        apiFormat: channel.apiFormat,
-    };
+export function resolveModelRequestConfig(config: AiConfig, value: string): AiConfig {
+    const model = value || config.model;
+    if (!isAiConfigReady(config, model)) throw new Error(i18n.t("ciyuan.officialModelRequired"));
+    return { ...config, model: modelOptionName(model), baseUrl: window.location.origin, apiKey: "", apiFormat: "ciyuan", proxyEnabled: false };
 }
 
 function normalizeChannels(config: AiConfig) {
@@ -486,6 +474,7 @@ function uniqueModelOptions(models: string[]) {
 
 export function buildApiUrl(baseUrl: string, path: string) {
     const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+    if (normalizedBaseUrl === window.location.origin) return `/v1${path}`;
     const lowerBaseUrl = normalizedBaseUrl.toLowerCase();
     const apiBaseUrl = lowerBaseUrl.endsWith("/v1") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
     return withLocalProxy(`${apiBaseUrl}${path}`);

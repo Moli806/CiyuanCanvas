@@ -1,24 +1,20 @@
 import { Search } from "lucide-react";
 import { type UIEvent, useEffect, useState } from "react";
-import { App, Empty, Input, Modal, Spin, Tag } from "antd";
+import { App, Button, Empty, Input, Modal, Spin, Tag } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { ALL_PROMPTS_OPTION } from "@/services/api/prompts";
 import { cn } from "@/lib/utils";
 import { PromptCard } from "./prompt-card";
 import { usePromptList } from "./use-prompt-list";
+import { usePromptAction } from "./use-prompt-action";
 
 export function PromptSelectDialog({ open, onOpenChange, onSelect }: { open: boolean; onOpenChange: (open: boolean) => void; onSelect: (prompt: string) => void }) {
     const { message } = App.useApp();
     const { t } = useTranslation();
     const [keyword, setKeyword] = useState("");
-    const [selectedTags, setSelectedTags] = useState<string[]>([]);
-    const [selectedCategory, setSelectedCategory] = useState(ALL_PROMPTS_OPTION);
-    const { query, items, tags: promptTags, categories: promptCategories } = usePromptList({ keyword, tags: selectedTags, category: selectedCategory, enabled: open });
-    const toggleTag = (tag: string) => {
-        if (tag === ALL_PROMPTS_OPTION) return setSelectedTags([]);
-        setSelectedTags((items) => (items.includes(tag) ? items.filter((item) => item !== tag) : [...items, tag]));
-    };
+    const { query, items, tags: promptTags, categories: promptCategories, selectedCategory, setSelectedCategory, selectedTags, toggleTag, incomplete, retryLibrary } = usePromptList({ keyword, enabled: open });
+    const action = usePromptAction(open);
     const selectPrompt = (prompt: string) => {
         onSelect(prompt);
         onOpenChange(false);
@@ -58,7 +54,9 @@ export function PromptSelectDialog({ open, onOpenChange, onSelect }: { open: boo
                     </div>
                 </aside>
                 <section className="flex min-h-0 min-w-0 flex-col">
-                    <Input size="large" prefix={<Search className="size-4 text-stone-400" />} value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder={t("prompts.searchTitle")} />
+                    <Input size="large" prefix={<Search className="size-4 text-stone-400" />} value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder={t("prompts.search")} />
+                    {incomplete ? <div role="alert" className="mt-3 text-sm">{t("prompts.libraryUnavailable")} <Button size="small" onClick={retryLibrary}>{t("common.retry")}</Button></div> : null}
+                    {action.feedback}
                     <div className="thin-scrollbar mt-4 min-h-0 flex-1 overflow-y-auto pr-2" data-canvas-no-zoom onScroll={handleListScroll} onWheelCapture={(event) => event.stopPropagation()}>
                         {query.isLoading ? (
                             <div className="flex h-40 items-center justify-center">
@@ -67,15 +65,11 @@ export function PromptSelectDialog({ open, onOpenChange, onSelect }: { open: boo
                         ) : null}
                         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                             {items.map((item) => (
-                                <PromptCard key={item.id} item={item} onOpen={() => selectPrompt(item.prompt)} onCopy={() => selectPrompt(item.prompt)} compact />
+                                <PromptCard key={`${item.sourceId}:${item.id}`} item={item} onOpen={() => void action.run(item, (ready) => selectPrompt(ready.prompt))} onCopy={() => void action.run(item, (ready) => selectPrompt(ready.prompt))} compact />
                             ))}
                         </div>
                         {!query.isLoading && items.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("prompts.empty")} className="py-8" /> : null}
-                        {query.isFetchingNextPage ? (
-                            <div className="py-4 text-center">
-                                <Spin size="small" />
-                            </div>
-                        ) : null}
+                        {query.hasNextPage ? <div className="py-4 text-center"><Button size="small" loading={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>{t("prompts.loadMore")}</Button></div> : null}
                     </div>
                 </section>
             </div>

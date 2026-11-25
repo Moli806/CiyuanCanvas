@@ -1,4 +1,4 @@
-import { ImagePlus, Images, Maximize2, Video } from "lucide-react";
+import { BookOpen, ImagePlus, Images, Maximize2, Settings, Video } from "lucide-react";
 
 export const navigationTools = [
     {
@@ -16,6 +16,14 @@ export const navigationTools = [
     {
         slug: "assets",
         icon: Images,
+    },
+    {
+        slug: "prompts",
+        icon: BookOpen,
+    },
+    {
+        slug: "config",
+        icon: Settings,
     },
 ] as const;
 

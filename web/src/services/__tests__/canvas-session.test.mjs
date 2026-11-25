@@ -17,6 +17,7 @@ const deferred = () => {
 };
 const turn = () => new Promise(setImmediate);
 class CanvasProjectDeletedError extends Error {}
+class CanvasProjectConflictError extends Error {}
 
 function load(path, dependencies = {}, globals = {}) {
     const code = ts.transpileModule(readFileSync(new URL(path, root), "utf8"), {
@@ -46,7 +47,9 @@ function syncHarness(api, store) {
     const module = load(
         "services/canvas-project-sync.ts",
         {
-            "@/services/ciyuan": { CiyuanCanvasProjectDeletedError: CanvasProjectDeletedError, ...api },
+            "@/services/ciyuan": { CiyuanCanvasProjectDeletedError: CanvasProjectDeletedError, CiyuanCanvasProjectConflictError: CanvasProjectConflictError, ...api },
+            "@/i18n": { t: (_, { title }) => `${title} (local conflict copy)` },
+            nanoid: { nanoid: () => "local-conflict-copy" },
             "@/stores/canvas/use-canvas-store": { useCanvasStore: store },
         },
         {
@@ -183,6 +186,109 @@ test("a delete conflict clears the stale project even when a newer upload is que
     assert.deepEqual(Array.from(state.deletedProjects, ({ id }) => id), [stale.id]);
 });
 
+test("an interrupted download leaves the newer cloud project untouched and resumes on visibility", async () => {
+    const local = { id: "project", title: "draft", updatedAt: "2026-01-01T01:00:00Z" };
+    const cloud = { ...local, title: "newer", updatedAt: "2026-01-01T02:00:00Z" };
+    const state = { hydrated: true, projects: [local], deletedProjects: [] };
+    let interrupted = true;
+    const writes = [];
+    const sync = syncHarness({
+        fetchServerCanvasProjects: async () => ({ projects: [{ id: local.id, revision: 2 }] }),
+        getServerCanvasProject: async () => {
+            if (interrupted) throw Error("offline");
+            return { revision: 2, data: cloud };
+        },
+        saveServerCanvasProject: async (id) => writes.push(id),
+    }, { getState: () => state, setState: (patch) => Object.assign(state, patch) });
+    await sync.pullAndMergeCanvasProjects();
+    sync.scheduleCanvasSync(state.projects, []);
+    sync.start();
+    await turn();
+    assert.deepEqual(writes, []);
+    interrupted = false;
+    await sync.pullAndMergeCanvasProjects({ deletionsOnly: true });
+    assert.equal(state.projects[0].title, cloud.title);
+    assert.equal(state.projects[0].cloud.revision, 2);
+});
+
+test("concurrent device edits keep a local conflict copy and the server version", async () => {
+    const local = { id: "project", title: "my edit", updatedAt: "2026-01-01T03:00:00Z", cloud: { revision: 1, updatedAt: "2026-01-01T01:00:00Z" } };
+    const remote = { id: local.id, title: "other edit", updatedAt: "2026-01-01T02:00:00Z" };
+    const state = { hydrated: true, projects: [local], deletedProjects: [] };
+    const writes = [];
+    const sync = syncHarness({
+        saveServerCanvasProject: async (id, _data, _signal, revision) => {
+            writes.push([id, revision]);
+            if (id === local.id) throw new CanvasProjectConflictError();
+        },
+        fetchServerCanvasProjects: async () => ({ projects: [{ id: local.id, revision: 2 }] }),
+        getServerCanvasProject: async () => ({ revision: 2, data: remote }),
+    }, { getState: () => state, setState: (patch) => Object.assign(state, patch) });
+    sync.scheduleCanvasSync(state.projects, []);
+    sync.start();
+    await turn();
+    await sync.pullAndMergeCanvasProjects({ deletionsOnly: true });
+    sync.start();
+    await turn();
+    assert.deepEqual(writes, [[local.id, 1], ["local-conflict-copy", 0]]);
+    assert.equal(state.projects[0].title, remote.title);
+    assert.equal(state.projects[1].title, "my edit (local conflict copy)");
+});
+
+test("a versioned browser merges a newer project from a rolled-back server", async () => {
+    const initial = "2026-01-01T01:00:00Z";
+    const state = { hydrated: true, projects: [{ id: "project", title: "before", updatedAt: initial, cloud: { revision: 5, updatedAt: initial } }], deletedProjects: [] };
+    const latest = { id: "project", title: "after", updatedAt: "2026-01-01T02:00:00Z" };
+    const sync = syncHarness({
+        fetchServerCanvasProjects: async () => ({ projects: [{ id: latest.id }] }),
+        getServerCanvasProject: async () => ({ data: latest }),
+    }, { getState: () => state, setState: (patch) => Object.assign(state, patch) });
+    await sync.pullAndMergeCanvasProjects();
+    assert.equal(state.projects[0].title, latest.title);
+    assert.equal(state.projects.length, 1);
+});
+
+test("model requests use the official catalog and session even with imported channel preferences", () => {
+    const origin = "https://canvas.example";
+    const api = load("stores/use-config-store.ts", {
+        zustand: { create }, "zustand/middleware": { persist: (initializer) => initializer }, "@/i18n": { t: (key) => key },
+    }, { window: { location: { origin } } });
+    const model = { name: "test-image", capability: "image", script: "legacy script" };
+    const old = { id: "old", name: "Old", baseUrl: "https://old.example", apiKey: "old-key", apiFormat: "openai", models: [model] };
+    const config = { ...api.defaultConfig, proxyEnabled: true, channels: [old, { ...old, id: "ciyuan", apiFormat: "ciyuan" }] };
+    api.useConfigStore.setState({ config });
+    const resolved = api.resolveModelRequestConfig(config, "ciyuan::test-image");
+    assert.equal(resolved.baseUrl, origin);
+    assert.equal(resolved.apiFormat, "ciyuan");
+    assert.equal(resolved.apiKey, "");
+    assert.equal(api.buildApiUrl(resolved.baseUrl, "/images/generations"), "/v1/images/generations");
+    assert.equal(api.resolveModelScript(config, "ciyuan::test-image"), "");
+    assert.throws(() => api.resolveModelRequestConfig(config, "old::test-image"), /officialModelRequired/);
+    assert.throws(() => api.resolveModelRequestConfig(config, "ciyuan::removed"), /officialModelRequired/);
+});
+
+test("video retrieval resumes the paid task after a network interruption and distinguishes a terminal failure", async () => {
+    const task = { id: "original-task", provider: "ciyuan", model: "video" };
+    const config = { baseUrl: "https://example.test", apiFormat: "ciyuan", model: "video" };
+    const queried = [];
+    const outcomes = [new Error("connection interrupted"), { status: "completed", result: { url: "original-video" } }, { status: "failed", error: "provider declined" }];
+    const api = load("services/api/video.ts", {
+        "@/stores/use-config-store": { resolveModelRequestConfig: (config) => config },
+        "@/services/ciyuan": {
+            pollCiyuanVideoTask: async (original) => {
+                queried.push(original.id);
+                const next = outcomes.shift();
+                if (next instanceof Error) throw next;
+                return next;
+            },
+        },
+    });
+    await assert.rejects(api.waitForVideoGenerationTask(config, task), (error) => !api.isVideoTaskFailed(error));
+    assert.equal((await api.waitForVideoGenerationTask(config, task)).url, "original-video");
+    await assert.rejects(api.waitForVideoGenerationTask(config, task), api.isVideoTaskFailed);
+    assert.deepEqual(queried, [task.id, task.id, task.id]);
+});
+
 test("restoring the official template uses a fresh ID and keeps its original deletion", () => {
     const original = "preset-rooftop-chase-v1";
     const prefix = "preset-restored-";
@@ -271,8 +377,21 @@ function accountHarness(owner) {
         window: { location: { origin: "https://ciyuan.invalid" } },
         localStorage: { getItem: (key) => records.get(key) ?? null, setItem: (key, value) => records.set(key, value), removeItem: (key) => records.delete(key) },
     });
-    return { store: module.useCiyuanStore, bootstrap, clear, clears: () => clears, records };
+    return { store: module.useCiyuanStore, config, bootstrap, clear, clears: () => clears, records };
 }
+
+test("an empty catalog clears the last configured model and keeps the signed-in account ready", async () => {
+    const account = accountHarness("1");
+    account.config.config.videoModel = "old-video";
+    account.config.config.model = "old-video";
+    const refresh = account.store.getState().refresh(true);
+    account.bootstrap.resolve({ user: { id: 1 }, models: [], defaults: { video: "old-video" } });
+    await refresh;
+    assert.equal(account.store.getState().status, "ready");
+    assert.equal(account.config.config.videoModel, "");
+    assert.equal(account.config.config.model, "");
+    assert.equal(account.config.config.channels[0].models.length, 0);
+});
 
 test("switching to another account clears the previous cache before making the new account ready", async () => {
     const h = accountHarness("1");
@@ -601,6 +720,79 @@ test("requestCiyuanChatQuestion buffers and parses SSE when WebView response.bod
     );
     assert.equal(answer, "柔光霓虹雨夜，蓝鲸少女抬头望向浮空岛");
     assert.deepEqual(deltas, ["柔光霓虹雨夜，", "柔光霓虹雨夜，蓝鲸少女抬头望向浮空岛"]);
+});
+
+test("motion transfer validates both references before upload and uses exact source seconds without a resolution", async () => {
+    const requests = [];
+    const uploads = [];
+    const session = load("services/ciyuan.ts", {
+        axios: { __esModule: true, AxiosHeaders, default: { request: async (config) => { requests.push(config); return { data: { task_id: "fixture-task" } }; } } },
+        "@/lib/media-size": { inferVideoRatio: () => "auto" },
+        "@/services/image-storage": { imageToDataUrl: async () => "data:image/png;base64,AA==" },
+        "@/services/file-storage": { getMediaBlob: async () => new Blob(["fixture"], { type: "video/mp4" }) },
+    }, {
+        window: { location: { origin: "https://canvas.invalid" } }, Blob, FormData,
+        fetch: async (url, init) => {
+            if (url === "/api/user/auth/refresh") return Response.json({ success: true, data: { access_token: "fixture", access_expires_at: 9999999999 } });
+            if (url.startsWith("data:")) return new Response(new Blob(["fixture"], { type: "image/png" }));
+            assert.equal(url, "/api/canvas/assets");
+            const name = init.body.get("file").name;
+            uploads.push(name);
+            return Response.json({ success: true, data: { path: `/canvas-assets/${name}` } });
+        },
+    });
+    const model = "Wan-2.2-plus";
+    session.setCiyuanCatalog([{ id: model, transport: "media-task", capability: "video", video: { min_images: 1, max_images: 1, min_videos: 1, max_videos: 1, max_audios: 0, min_seconds: 1, max_seconds: 15, source_video_duration: true, prompt_optional: true, frames: false, resolutions: [], default_resolution: "" } }]);
+    const video = { storageKey: "motion", durationMs: 3750 };
+    const create = (images, videos) => session.createCiyuanVideoTask({ videoMode: "reference", videoSeconds: "8", vquality: "1080" }, model, "", images, { videos });
+    await assert.rejects(create([], [video]), /参考图/);
+    await assert.rejects(create([{}], []), /参考视频/);
+    await assert.rejects(create([{}, {}], [video]), /参考图/);
+    await assert.rejects(create([{}], [{ ...video, durationMs: 15001 }]), /时长/);
+    assert.equal(uploads.length, 0);
+    assert.equal((await create([{}], [video])).id, "fixture-task");
+    assert.equal(requests[0].url, "/v1/media/generate");
+    assert.deepEqual(JSON.parse(JSON.stringify(requests[0].data)), { model, prompt: "", params: { duration: 3.75, images: ["https://canvas.invalid/canvas-assets/ref.png"], video_url: ["https://canvas.invalid/canvas-assets/ref.mp4"] } });
+});
+
+test("new media-task video submits only its prompt and a pending spec never submits", async () => {
+    const requests = [];
+    const media = load("services/ciyuan.ts", { axios: { __esModule: true, AxiosHeaders, default: { request: async (request) => { requests.push(request); return { data: { task_id: "mock" } }; } } } }, {
+        window: { location: { origin: "https://canvas.invalid" } },
+        fetch: async () => Response.json({ success: true, data: { access_token: "fixture", access_expires_at: 9999999999 } }),
+    });
+    const model = "future-video";
+    const entry = { id: model, capability: "video", transport: "media-task", video: { max_images: 0, max_videos: 0, max_audios: 0, prompt_only: true } };
+    media.setCiyuanCatalog([entry]);
+    const config = { videoSeconds: "12", vquality: "1080", size: "16:9" };
+    await media.createCiyuanVideoTask(config, model, "camera pans", []);
+    assert.deepEqual(JSON.parse(JSON.stringify(requests[0].data)), { model, prompt: "camera pans" });
+    media.setCiyuanCatalog([{ ...entry, video: { ...entry.video, spec_required: true } }]);
+    await assert.rejects(media.createCiyuanVideoTask(config, model, "camera pans", []), /待补充画布规格/);
+    assert.equal(requests.length, 1);
+});
+
+test("new image models use the declared transport and omit unsupported request parameters", async () => {
+    const posts = [];
+    let transport = "openai-image";
+    const config = { apiFormat: "ciyuan", model: "studio-example", systemPrompt: "", count: "9", quality: "high", size: "1024x1024", background: "transparent" };
+    const image = load("services/api/image.ts", {
+        "@/services/ciyuan": {
+            getCiyuanModel: () => ({ image: { max_count: 1, supports_edit: false } }), imageTransport: () => transport,
+            ciyuanAxios: async (request) => { posts.push(request); return { data: { data: [{ url: "/fixture.png" }] } }; },
+            requestCiyuanMediaImages: async (current) => { posts.push({ media: current.model }); return []; },
+        },
+        "@/stores/use-config-store": { resolveModelRequestConfig: (current) => current, resolveModelScript: () => "", buildApiUrl: (_, url) => `/v1${url}` },
+        "@/services/image-attempts": { resolveAttemptAssets: async () => [], finishImageAttempt: async () => {} },
+        "@/i18n": { t: (key) => key }, nanoid: { nanoid: () => "fixture" },
+    });
+    await image.requestGeneration(config, "studio", { requestId: "fixture" });
+    assert.equal(posts[0].url, "/v1/images/generations");
+    assert.deepEqual({ ...posts[0].data }, { model: "studio-example", prompt: "studio" });
+    await assert.rejects(image.requestEdit(config, "studio", [{}]), /imageEditUnavailable/);
+    transport = "media-task";
+    await image.requestGeneration(config, "studio");
+    assert.deepEqual(posts[1], { media: "studio-example" });
 });
 
 test("ciyuanSessionFetch refuses WHATWG backslash and tab cross-origin URLs", async () => {
