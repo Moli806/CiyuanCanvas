@@ -442,9 +442,46 @@ export async function requestCiyuanBananaImages(config: AiConfig, prompt: string
     return results;
 }
 
+const VIDEO_REFERENCE_MAX_EDGE = 2048;
+const VIDEO_REFERENCE_JPEG_QUALITY = 0.85;
+const VIDEO_REFERENCE_PASSTHROUGH_BYTES = 1.5 * 1024 * 1024;
+
+// 视频参考图由上游跨公网回源下载，几 MB 的无损 PNG 常在传输中途断流；
+// 超过阈值时先缩到 2048px 再编码，编码结果反而更大时保留原图。
+async function shrinkVideoReference(dataUrl: string): Promise<{ blob: Blob; name: string }> {
+    const original = await (await fetch(dataUrl)).blob();
+    if (original.size <= VIDEO_REFERENCE_PASSTHROUGH_BYTES) return { blob: original, name: "ref.png" };
+    const bitmap = await createImageBitmap(original);
+    const scale = Math.min(1, VIDEO_REFERENCE_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+        bitmap.close();
+        return { blob: original, name: "ref.png" };
+    }
+    context.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+    const transparent = hasTransparentPixel(context.getImageData(0, 0, width, height).data);
+    const type = transparent ? "image/png" : "image/jpeg";
+    const encoded = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, type, VIDEO_REFERENCE_JPEG_QUALITY));
+    if (!encoded || encoded.size >= original.size) return { blob: original, name: "ref.png" };
+    return { blob: encoded, name: transparent ? "ref.png" : "ref.jpg" };
+}
+
+function hasTransparentPixel(pixels: Uint8ClampedArray) {
+    for (let index = 3; index < pixels.length; index += 4) {
+        if (pixels[index] !== 255) return true;
+    }
+    return false;
+}
+
 async function uploadReferenceImage(image: ReferenceImage, signal?: AbortSignal) {
-    const dataUrl = await imageToDataUrl(image);
-    return uploadCanvasAsset(dataUrl, "ref.png", signal);
+    const { blob, name } = await shrinkVideoReference(await imageToDataUrl(image));
+    return uploadCanvasAsset(blob, name, signal);
 }
 
 async function uploadReferenceMedia(item: ReferenceVideo | ReferenceAudio, fallbackName: string, signal?: AbortSignal) {
