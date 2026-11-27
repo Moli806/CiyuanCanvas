@@ -7,11 +7,12 @@ import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
-import { ModelPicker } from "@/components/model-picker";
+import { ModelPicker, type ModelPickerPricingContext } from "@/components/model-picker";
 import { PromptOptimizerDialog } from "@/components/prompt-optimizer-dialog";
 import { VideoSettingsPanel, normalizeVideoResolutionValue, normalizeVideoSizeValue, videoModeLabel, videoSizeLabel } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { clampVideoSeconds } from "@/lib/media-size";
+import { formatModelUnitPrice, formatMultiplier, formatRmb, resolveModelPrice, type ModelPriceUnit } from "@/lib/model-pricing";
 import { useWorkbenchModel } from "@/hooks/use-workbench-model";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
@@ -144,6 +145,37 @@ export default function VideoPage() {
     });
     const spec = getCiyuanModel(modelOptionName(model))?.video;
     const framesMode = Boolean(spec?.frames && effectiveConfig.videoMode === "frames");
+    const hasReferenceVideo = !framesMode && videoReferences.length > 0;
+    const activeResolution = normalizeResolution(effectiveConfig.vquality) || spec?.default_resolution || "";
+    const pricingMap = useCiyuanStore((state) => state.pricing);
+    const groupRatios = useCiyuanStore((state) => state.groupRatios);
+    const userGroup = useCiyuanStore((state) => state.user?.group);
+    const sourceDurationSeconds = usesSourceVideoDuration(spec) && videoReferences[0]?.durationMs ? Number((videoReferences[0].durationMs / 1000).toFixed(2)) : undefined;
+    const billedSeconds = usesSourceVideoDuration(spec)
+        ? sourceDurationSeconds
+        : spec?.prompt_only
+          ? undefined
+          : Number(normalizeVideoSeconds(effectiveConfig.videoSeconds, spec)) || undefined;
+    const videoPricingContext: ModelPickerPricingContext = {
+        hasReferenceVideo,
+        resolution: activeResolution,
+        showTriggerPrice: true,
+    };
+    const activeModelPrice = resolveModelPrice(pricingMap[modelOptionName(model)], {
+        capability: "video",
+        hasReferenceVideo,
+        resolution: activeResolution,
+        seconds: billedSeconds,
+        userGroup,
+        groupRatios,
+        spec: getCiyuanModel(modelOptionName(model)),
+    });
+    const priceUnitLabels: Record<ModelPriceUnit, string> = {
+        second: t("workbench.priceUnitSecond"),
+        clip: t("workbench.priceUnitClip"),
+        image: t("workbench.priceUnitImage"),
+        request: t("workbench.priceUnitRequest"),
+    };
     const limits = videoReferenceLimits(spec, framesMode);
     const totalReferences = references.length + videoReferences.length + audioReferences.length;
     const omniReferenceMissing = Boolean(spec?.requires_all_refs) && (!references.length || !videoReferences.length || !audioReferences.length);
@@ -558,7 +590,7 @@ export default function VideoPage() {
                         <div className="mt-6 space-y-5">
                             <label className="block min-w-0">
                                 <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">{t("workbench.model")}</span>
-                                <ModelPicker config={effectiveConfig} value={model} onChange={selectModel} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} />
+                                <ModelPicker config={effectiveConfig} value={model} onChange={selectModel} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} pricingContext={videoPricingContext} />
                             </label>
 
                             {spec?.prompt_optional ? null : (
@@ -676,6 +708,33 @@ export default function VideoPage() {
                         </div>
 
                         <div className="mt-auto pt-6">
+                            {activeModelPrice ? (
+                                <div
+                                    className={`mb-2.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded-lg border px-3 py-2 text-xs ${
+                                        activeModelPrice.videoInputSurcharge
+                                            ? "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                                            : "border-border bg-muted/40 text-muted-foreground"
+                                    }`}
+                                >
+                                    <span className="font-medium tabular-nums">
+                                        {activeModelPrice.totalPrice !== undefined
+                                            ? t("workbench.priceEstimated", { total: formatRmb(activeModelPrice.totalPrice) })
+                                            : t("workbench.priceUnitOnly", { unit: formatModelUnitPrice(activeModelPrice, priceUnitLabels) })}
+                                    </span>
+                                    <span className="tabular-nums opacity-90">
+                                        {activeModelPrice.unit === "second"
+                                            ? billedSeconds
+                                                ? t("workbench.priceBreakdownSeconds", { unit: formatModelUnitPrice(activeModelPrice, priceUnitLabels), seconds: billedSeconds })
+                                                : t("workbench.priceBySourceDuration")
+                                            : activeModelPrice.resolution
+                                              ? `${activeModelPrice.resolution} · ${t("workbench.priceByClip")}`
+                                              : t("workbench.priceByClip")}
+                                        {activeModelPrice.videoInputSurcharge
+                                            ? ` · ${t("workbench.priceRefVideoSurcharge", { multiplier: formatMultiplier(activeModelPrice.videoInputMultiplier) })}`
+                                            : ""}
+                                    </span>
+                                </div>
+                            ) : null}
                             <Button type="primary" size="large" block icon={<Sparkles className="size-4" />} loading={running} disabled={!canGenerate || running} onClick={() => void generate()}>
                                 {t("workbench.generate")}
                             </Button>
@@ -742,7 +801,7 @@ export default function VideoPage() {
             </Drawer>
             <Drawer title={t("workbench.settings")} placement="bottom" height="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
                 <div className="grid grid-cols-2 gap-3 pb-4">
-                    <GenerationSettings config={effectiveConfig} model={model} onModelChange={selectModel} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
+                    <GenerationSettings config={effectiveConfig} model={model} onModelChange={selectModel} updateConfig={updateConfig} openConfigDialog={openConfigDialog} pricingContext={videoPricingContext} />
                 </div>
             </Drawer>
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
@@ -754,15 +813,15 @@ export default function VideoPage() {
     );
 }
 
-function GenerationSettings({ config, model, onModelChange, updateConfig, openConfigDialog }: { config: AiConfig; model: string; onModelChange: (value: string) => void; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void }) {
+function GenerationSettings({ config, model, onModelChange, updateConfig, openConfigDialog, pricingContext }: { config: AiConfig; model: string; onModelChange: (value: string) => void; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void; pricingContext: ModelPickerPricingContext }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const { t } = useTranslation();
 
     return (
         <>
-            <label className="col-span-2 block min-w-0 sm:col-span-1">
+            <label className="col-span-2 block min-w-0">
                 <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">{t("workbench.model")}</span>
-                <ModelPicker config={config} value={model} onChange={onModelChange} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} />
+                <ModelPicker config={config} value={model} onChange={onModelChange} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} pricingContext={pricingContext} />
             </label>
             <div className="col-span-2">
                 <VideoSettingsPanel config={config} model={model} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-4" />

@@ -6,11 +6,12 @@ import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
 import { ImageSettingsPanel } from "@/components/image-settings-panel";
-import { ModelPicker } from "@/components/model-picker";
+import { ModelPicker, type ModelPickerPricingContext } from "@/components/model-picker";
 import { PromptOptimizerDialog } from "@/components/prompt-optimizer-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
+import { formatModelUnitPrice, formatRmb, resolveModelPrice, type ModelPriceUnit } from "@/lib/model-pricing";
 import { useWorkbenchModel } from "@/hooks/use-workbench-model";
 import { getCiyuanModel, imageTransport } from "@/services/ciyuan";
 import { stageGeneratedImage } from "@/services/generated-image";
@@ -124,6 +125,23 @@ export default function ImagePage() {
     const canGenerate = Boolean(prompt.trim() && model && isAiConfigReady(effectiveConfig, model) && (supportsEdit || !references.length));
     const generationCount = Math.max(1, Math.min(10, imageSpec?.max_count ?? 10, Number(config.count) || 1));
     const recoveredImages = useCiyuanStore((state) => state.recoveredImages);
+    const pricingMap = useCiyuanStore((state) => state.pricing);
+    const groupRatios = useCiyuanStore((state) => state.groupRatios);
+    const userGroup = useCiyuanStore((state) => state.user?.group);
+    const imagePricingContext: ModelPickerPricingContext = { showTriggerPrice: true };
+    const activeModelPrice = resolveModelPrice(pricingMap[modelOptionName(model)], {
+        capability: "image",
+        count: generationCount,
+        userGroup,
+        groupRatios,
+        spec: getCiyuanModel(modelOptionName(model)),
+    });
+    const priceUnitLabels: Record<ModelPriceUnit, string> = {
+        second: t("workbench.priceUnitSecond"),
+        clip: t("workbench.priceUnitClip"),
+        image: t("workbench.priceUnitImage"),
+        request: t("workbench.priceUnitRequest"),
+    };
 
     useEffect(() => {
         if (recoveredImages <= 0) return;
@@ -685,7 +703,8 @@ export default function ImagePage() {
 
                             <div className="flex items-center justify-between rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm dark:border-stone-800 dark:bg-stone-900 sm:hidden">
                                 <span className="truncate text-stone-500 dark:text-stone-400">
-                                    {modelOptionLabel(effectiveConfig, model)} · {effectiveConfig.size} · {effectiveConfig.quality}
+                                    {modelOptionLabel(effectiveConfig, model)}
+                                    {activeModelPrice ? ` · ${formatModelUnitPrice(activeModelPrice, priceUnitLabels)}` : ""} · {effectiveConfig.size} · {effectiveConfig.quality}
                                 </span>
                                 <Button size="small" type="text" icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
                                     {t("workbench.adjust")}
@@ -693,11 +712,17 @@ export default function ImagePage() {
                             </div>
 
                             <div className="hidden gap-4 sm:grid sm:grid-cols-2">
-                                <GenerationSettings config={effectiveConfig} model={model} onModelChange={selectModel} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
+                                <GenerationSettings config={effectiveConfig} model={model} onModelChange={selectModel} updateConfig={updateConfig} openConfigDialog={openConfigDialog} pricingContext={imagePricingContext} />
                             </div>
                         </div>
 
                         <div className="mt-auto pt-6">
+                            {activeModelPrice && activeModelPrice.totalPrice !== undefined ? (
+                                <div className="mb-2.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                                    <span className="font-medium tabular-nums">{t("workbench.priceEstimated", { total: formatRmb(activeModelPrice.totalPrice) })}</span>
+                                    <span className="tabular-nums opacity-90">{t("workbench.priceBreakdownImages", { unit: formatModelUnitPrice(activeModelPrice, priceUnitLabels), count: generationCount })}</span>
+                                </div>
+                            ) : null}
                             <Button type="primary" size="large" block icon={<Sparkles className="size-4" />} loading={running} disabled={!canGenerate || running} onClick={() => void generate()}>
                                 {t("workbench.generate")}
                             </Button>
@@ -755,7 +780,7 @@ export default function ImagePage() {
             </Drawer>
             <Drawer title={t("workbench.settings")} placement="bottom" size="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
                 <div className="grid grid-cols-2 gap-3 pb-4">
-                    <GenerationSettings config={effectiveConfig} model={model} onModelChange={selectModel} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
+                    <GenerationSettings config={effectiveConfig} model={model} onModelChange={selectModel} updateConfig={updateConfig} openConfigDialog={openConfigDialog} pricingContext={imagePricingContext} />
                 </div>
             </Drawer>
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
@@ -767,15 +792,15 @@ export default function ImagePage() {
     );
 }
 
-function GenerationSettings({ config, model, onModelChange, updateConfig, openConfigDialog }: { config: AiConfig; model: string; onModelChange: (value: string) => void; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void }) {
+function GenerationSettings({ config, model, onModelChange, updateConfig, openConfigDialog, pricingContext }: { config: AiConfig; model: string; onModelChange: (value: string) => void; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void; pricingContext: ModelPickerPricingContext }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const { t } = useTranslation();
 
     return (
         <>
-            <label className="col-span-2 block min-w-0 sm:col-span-1">
+            <label className="col-span-2 block min-w-0">
                 <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">{t("workbench.model")}</span>
-                <ModelPicker config={config} value={model} onChange={onModelChange} capability="image" fullWidth onMissingConfig={() => openConfigDialog(false)} />
+                <ModelPicker config={config} value={model} onChange={onModelChange} capability="image" fullWidth onMissingConfig={() => openConfigDialog(false)} pricingContext={pricingContext} />
             </label>
             <div className="col-span-2">
                 <ImageSettingsPanel config={config} model={model} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-4" maxCount={10} />

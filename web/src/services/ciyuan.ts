@@ -1,6 +1,7 @@
 import axios, { AxiosHeaders, type AxiosRequestConfig, type AxiosResponse } from "axios";
 import { nanoid } from "nanoid";
 
+import type { CiyuanPricingEntry } from "@/lib/model-pricing";
 import { inferMediaRatio, inferMediaScale, inferVideoRatio } from "@/lib/media-size";
 import { imageToDataUrl } from "@/services/image-storage";
 import { getMediaBlob } from "@/services/file-storage";
@@ -100,6 +101,11 @@ export type CiyuanBootstrap = {
     defaults: Partial<Record<CiyuanCapability, string>>;
     storage?: CiyuanCanvasStorage;
     image_replay_timeout_seconds?: number;
+};
+
+export type CiyuanPricingSnapshot = {
+    models: Record<string, CiyuanPricingEntry>;
+    groupRatios: Record<string, number>;
 };
 
 export class CiyuanUnauthorizedError extends Error {
@@ -318,6 +324,30 @@ export async function fetchCiyuanBootstrap(): Promise<CiyuanBootstrap> {
         throw new Error(readMessage(payload) || "连接词元API失败");
     }
     return payload.data;
+}
+
+export async function fetchCiyuanPricing(): Promise<CiyuanPricingSnapshot> {
+    const response = await sessionRequest("/api/pricing", { cache: "no-store" });
+    if (response.status === 401 || response.redirected || !response.headers.get("content-type")?.includes("application/json")) {
+        throw new CiyuanUnauthorizedError();
+    }
+    const payload = (await response.json().catch(() => null)) as {
+        success?: boolean;
+        message?: string;
+        data?: CiyuanPricingEntry[];
+        group_ratio?: Record<string, number>;
+    } | null;
+    if (!response.ok || !payload?.success || !Array.isArray(payload.data)) {
+        throw new Error(readMessage(payload) || "读取模型价格失败");
+    }
+    const models: Record<string, CiyuanPricingEntry> = {};
+    for (const item of payload.data) {
+        if (item?.model_name) models[item.model_name] = item;
+    }
+    return {
+        models,
+        groupRatios: payload.group_ratio && typeof payload.group_ratio === "object" ? payload.group_ratio : {},
+    };
 }
 
 export async function logoutCiyuan() {

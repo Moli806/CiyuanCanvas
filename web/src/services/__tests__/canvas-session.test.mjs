@@ -824,3 +824,127 @@ test("ciyuanSessionFetch refuses WHATWG backslash and tab cross-origin URLs", as
     assert.equal(projectCall.auth, "Bearer secret-session-token");
     assert.equal(projectCall.credentials, "include");
 });
+
+test("resolveModelPrice evaluates live billing expressions including reference-video surcharge and resolutions", () => {
+    const pricing = load("lib/model-pricing.ts");
+    const units = { second: "秒", clip: "条", image: "张", request: "次" };
+
+    const seedance = {
+        model_name: "Seedance-2.5-720p",
+        billing_mode: "tiered_expr",
+        billing_expr: 'tier("base", u("seconds") * 0.8 * (u("video_input") == true ? 2 : 1))',
+        enable_groups: ["default"],
+    };
+    const normal = pricing.resolveModelPrice(seedance, { capability: "video", hasReferenceVideo: false, seconds: 10, userGroup: "default", groupRatios: { default: 1 } });
+    assert.equal(pricing.formatModelUnitPrice(normal, units), "¥0.8/秒");
+    assert.equal(normal.videoInputSurcharge, false);
+    assert.equal(normal.totalPrice, 8);
+
+    const withRefVideo = pricing.resolveModelPrice(seedance, { capability: "video", hasReferenceVideo: true, seconds: 10, userGroup: "default", groupRatios: { default: 1 } });
+    assert.equal(pricing.formatModelUnitPrice(withRefVideo, units), "¥1.6/秒");
+    assert.equal(withRefVideo.videoInputSurcharge, true);
+    assert.equal(withRefVideo.videoInputMultiplier, 2);
+    assert.equal(withRefVideo.totalPrice, 16);
+
+    const seedanceOne = {
+        model_name: "Seedance-2.5-720p-one",
+        billing_mode: "tiered_expr",
+        billing_expr: 'tier("base", u("requests") * 7)',
+        enable_groups: ["default"],
+    };
+    const oneWithRef = pricing.resolveModelPrice(seedanceOne, { capability: "video", hasReferenceVideo: true });
+    assert.equal(pricing.formatModelUnitPrice(oneWithRef, units), "¥7/条");
+    assert.equal(oneWithRef.videoInputSurcharge, false);
+    assert.equal(oneWithRef.totalPrice, 7);
+
+    const grokVideo = {
+        model_name: "grok-imagine-video-1.5",
+        billing_mode: "tiered_expr",
+        billing_expr: 'u("resolution") == "480p" ? tier("480p", u("requests") * 0.25) : u("resolution") == "720p" ? tier("720p", u("requests") * 0.4) : tier("1080p", u("requests") * 0.5)',
+        billing_usage_schema: { resolution: { enum: ["480p", "720p", "1080p"] } },
+        enable_groups: ["default"],
+    };
+    const grokRange = pricing.resolveModelPrice(grokVideo, { capability: "video", allowResolutionRange: true });
+    assert.equal(pricing.formatModelUnitPrice(grokRange, units), "¥0.25~0.5/条");
+    const grok1080 = pricing.resolveModelPrice(grokVideo, { capability: "video", resolution: "1080" });
+    assert.equal(pricing.formatModelUnitPrice(grok1080, units), "¥0.5/条");
+    assert.equal(grok1080.resolution, "1080p");
+
+    const upscale = {
+        model_name: "视频超分",
+        billing_mode: "tiered_expr",
+        billing_expr: 'tier("base", u("seconds") * (u("resolution") == "2k" ? 0.0693 : u("resolution") == "1080p" ? 0.039 : u("resolution") == "4k" ? 0.156 : 0.0217))',
+        billing_usage_schema: { resolution: { enum: ["720p", "1080p", "2k", "4k"] } },
+    };
+    const upscaleRange = pricing.resolveModelPrice(upscale, { capability: "video", allowResolutionRange: true });
+    assert.equal(pricing.formatModelUnitPrice(upscaleRange, units), "¥0.0217~0.156/秒");
+    const upscaleFallback = pricing.resolveModelPrice(upscale, { capability: "video", resolution: "480", spec: { id: "视频超分", capability: "video", video: { default_resolution: "720p", resolutions: ["720p", "1080p", "2k", "4k"] } } });
+    assert.equal(pricing.formatModelUnitPrice(upscaleFallback, units), "¥0.0217/秒");
+
+    const grokImage = {
+        model_name: "grok-imagine-image-2.0",
+        billing_mode: "tiered_expr",
+        billing_expr: 'tier("base", fixed(0.1)) * image_count',
+        enable_groups: ["vip"],
+    };
+    const imageFour = pricing.resolveModelPrice(grokImage, { capability: "image", count: 4, userGroup: "vip", groupRatios: { vip: 1.5 } });
+    assert.equal(pricing.formatModelUnitPrice(imageFour, units), "¥0.15/张");
+    assert.equal(imageFour.totalPrice, 0.6);
+
+    const textToken = {
+        model_name: "gpt-6-astra",
+        billing_mode: "tiered_expr",
+        billing_expr: 'tier("base", p * 3 + c * 15)',
+    };
+    assert.equal(pricing.resolveModelPrice(textToken, { capability: "text" }), null);
+});
+
+test("logout clears cached pricing and ignores stale in-flight /api/pricing responses", async () => {
+    const pendingPricing = deferred();
+    const storeMod = load(
+        "stores/use-ciyuan-store.ts",
+        {
+            zustand: { create },
+            "@/stores/use-config-store": {
+                createModelChannel: (item) => item,
+                encodeChannelModel: (channel, id) => `${channel}:${id}`,
+                modelOptionName: (value) => value.split(":").pop() || "",
+                modelOptionsFromChannels: () => [],
+                useConfigStore: {
+                    getState: () => ({ config: { channels: [], imageModel: "", videoModel: "", textModel: "", model: "", videoMode: "reference" } }),
+                    setState: () => {},
+                },
+            },
+            "@/services/ciyuan": {
+                CiyuanUnauthorizedError: class extends Error {},
+                fetchCanvasStorage: async () => ({ storage: null }),
+                fetchCiyuanBootstrap: async () => ({ user: { id: 1, username: "alice", group: "default", quota: 100, used_quota: 0 }, quota_per_unit: 500000, models: [], defaults: {} }),
+                fetchCiyuanPricing: () => pendingPricing.promise,
+                logoutCiyuan: async () => {},
+                resetCiyuanSession: () => {},
+                setCiyuanCatalog: () => {},
+            },
+            "@/services/canvas-project-sync": { resetCanvasSyncState: () => {} },
+            "@/services/image-attempts": { clearCanvasLocalData: async () => {} },
+        },
+        {
+            window: { location: { origin: "https://ciyuanweb.cn" } },
+            localStorage: {
+                getItem: () => "1",
+                setItem: () => {},
+                removeItem: () => {},
+            },
+        },
+    );
+
+    await storeMod.useCiyuanStore.getState().refresh();
+    assert.equal(storeMod.useCiyuanStore.getState().pricingLoading, true);
+    const logoutPromise = storeMod.useCiyuanStore.getState().logout();
+    pendingPricing.resolve({
+        models: { "Seedance-2.5-720p": { model_name: "Seedance-2.5-720p", billing_mode: "tiered_expr", billing_expr: 'tier("base", u("seconds") * 0.8)' } },
+        groupRatios: { default: 1 },
+    });
+    await logoutPromise;
+    assert.equal(Object.keys(storeMod.useCiyuanStore.getState().pricing).length, 0);
+    assert.equal(storeMod.useCiyuanStore.getState().pricingLoadedAt, 0);
+});

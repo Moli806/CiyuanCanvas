@@ -114,7 +114,19 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
                         </>
                     ) : mode === "video" ? (
                         <>
-                            <ModelPicker config={config} value={config.model} onChange={(model) => onConfigChange(node.id, { model })} capability="video" onMissingConfig={() => openConfigDialog(true)} className="max-w-[190px]" />
+                            <ModelPicker
+                                config={config}
+                                value={config.model}
+                                onChange={(model) => onConfigChange(node.id, { model })}
+                                capability="video"
+                                onMissingConfig={() => openConfigDialog(true)}
+                                className="max-w-[190px]"
+                                pricingContext={{
+                                    hasReferenceVideo: config.videoMode !== "frames" && connectedNodes.some((item) => item.type === CanvasNodeType.Video),
+                                    resolution: config.vquality,
+                                    showTriggerPrice: false,
+                                }}
+                            />
                             <CanvasVideoSettingsPopover config={config} buttonClassName="!h-10 !max-w-[220px] !justify-start !rounded-full !px-3" onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))} />
                         </>
                     ) : mode === "audio" ? (

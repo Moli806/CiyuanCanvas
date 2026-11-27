@@ -1,10 +1,12 @@
 import { create } from "zustand";
 
+import type { CiyuanPricingEntry } from "@/lib/model-pricing";
 import { createModelChannel, encodeChannelModel, modelOptionName, modelOptionsFromChannels, useConfigStore } from "@/stores/use-config-store";
 import {
     CiyuanUnauthorizedError,
     fetchCanvasStorage,
     fetchCiyuanBootstrap,
+    fetchCiyuanPricing,
     logoutCiyuan,
     resetCiyuanSession,
     setCiyuanCatalog,
@@ -23,12 +25,17 @@ type CiyuanState = {
     status: SessionStatus;
     user: CiyuanUser | null;
     models: CiyuanModel[];
+    pricing: Record<string, CiyuanPricingEntry>;
+    groupRatios: Record<string, number>;
+    pricingLoadedAt: number;
+    pricingLoading: boolean;
     quotaPerUnit: number;
     error: string;
     storage: CiyuanCanvasStorage | null;
     imageReplayTimeoutSeconds: number;
     recoveredImages: number;
     refresh: (silent?: boolean) => Promise<void>;
+    refreshPricing: (force?: boolean) => Promise<void>;
     refreshStorage: () => Promise<void>;
     setStorage: (storage: CiyuanCanvasStorage) => void;
     setRecoveredImages: (count: number) => void;
@@ -36,6 +43,7 @@ type CiyuanState = {
 };
 
 let refreshPromise: Promise<void> | null = null;
+let pricingPromise: Promise<void> | null = null;
 let sessionVersion = 0;
 const canvasOwnerKey = "ciyuan-canvas-owner";
 
@@ -113,6 +121,10 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
     status: "idle",
     user: null,
     models: [],
+    pricing: {},
+    groupRatios: {},
+    pricingLoadedAt: 0,
+    pricingLoading: false,
     quotaPerUnit: 500000,
     error: "",
     storage: null,
@@ -129,7 +141,7 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
                 if (version !== sessionVersion) return;
                 const owner = String(data.user.id);
                 if (localStorage.getItem(canvasOwnerKey) !== owner || (get().user && get().user?.id !== data.user.id)) {
-                    set({ status: "loading", user: null, storage: null, recoveredImages: 0 });
+                    set({ status: "loading", user: null, pricing: {}, groupRatios: {}, pricingLoadedAt: 0, pricingLoading: false, storage: null, recoveredImages: 0 });
                     resetCanvasSyncState();
                     resetCiyuanSession();
                     const { clearCanvasLocalData } = await import("@/services/image-attempts");
@@ -148,13 +160,14 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
                     ...(data.storage ? { storage: data.storage } : {}),
                     imageReplayTimeoutSeconds: data.image_replay_timeout_seconds && data.image_replay_timeout_seconds > 0 ? data.image_replay_timeout_seconds : 1800,
                 });
+                void get().refreshPricing(true);
             } catch (error) {
                 if (version !== sessionVersion) return;
                 if (error instanceof CiyuanUnauthorizedError) {
                     resetCanvasSyncState();
                     resetCiyuanSession();
                     clearConfigToken();
-                    set({ status: "unauthenticated", user: null, models: [], error: "" });
+                    set({ status: "unauthenticated", user: null, models: [], pricing: {}, groupRatios: {}, pricingLoadedAt: 0, pricingLoading: false, error: "" });
                     return;
                 }
                 if (silent && get().status === "ready") return;
@@ -164,6 +177,34 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
             }
         })();
         refreshPromise = promise;
+        return promise;
+    },
+
+    refreshPricing: (force = false) => {
+        if (pricingPromise) return pricingPromise;
+        const loadedAt = get().pricingLoadedAt;
+        const minInterval = force ? 2_000 : 30_000;
+        if (loadedAt > 0 && Date.now() - loadedAt < minInterval) return Promise.resolve();
+        const version = sessionVersion;
+        const userId = get().user?.id;
+        set({ pricingLoading: true });
+        const promise = (async () => {
+            try {
+                const snapshot = await fetchCiyuanPricing();
+                if (version !== sessionVersion || (userId !== undefined && userId !== get().user?.id)) return;
+                set({
+                    pricing: snapshot.models,
+                    groupRatios: snapshot.groupRatios,
+                    pricingLoadedAt: Date.now(),
+                });
+            } catch {
+                // Pricing display is advisory; never disrupt active editing or generation on transient failures.
+            } finally {
+                if (version === sessionVersion) pricingPromise = null;
+                if (version === sessionVersion) set({ pricingLoading: false });
+            }
+        })();
+        pricingPromise = promise;
         return promise;
     },
 
@@ -181,8 +222,9 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
     logout: async () => {
         sessionVersion += 1;
         refreshPromise = null;
+        pricingPromise = null;
         resetCanvasSyncState();
-        set({ status: "loading", user: null, models: [], storage: null });
+        set({ status: "loading", user: null, models: [], pricing: {}, groupRatios: {}, pricingLoadedAt: 0, pricingLoading: false, storage: null });
         const logout = logoutCiyuan();
         try {
             const { clearCanvasLocalData } = await import("@/services/image-attempts");
@@ -191,7 +233,7 @@ export const useCiyuanStore = create<CiyuanState>((set, get) => ({
         } finally {
             await logout;
             clearConfigToken();
-            set({ status: "unauthenticated", user: null, models: [], error: "", storage: null, imageReplayTimeoutSeconds: 1800, recoveredImages: 0 });
+            set({ status: "unauthenticated", user: null, models: [], pricing: {}, groupRatios: {}, pricingLoadedAt: 0, pricingLoading: false, error: "", storage: null, imageReplayTimeoutSeconds: 1800, recoveredImages: 0 });
         }
     },
 }));
